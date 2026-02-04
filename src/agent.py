@@ -1,27 +1,190 @@
 """
 Groq LLM agent for generating honeypot responses
 Owner: Member A
+
+Security & Stability Fixes:
+- Thread-safe client initialization
+- API key validation
+- Input sanitization (prompt injection protection)
+- Timeout configuration
+- Basic retry logic
+- Resource cleanup
+- Safe response extraction
 """
 
 from typing import List, Dict, Optional
+import threading
+import time
+import re
+import atexit
+import logging
 from groq import Groq
 import httpx
 from src.config import Config
 
 
+# ============== LOGGING ==============
+
+logger = logging.getLogger(__name__)
+
+
+# ============== THREAD-SAFE CLIENT ==============
+
 _client: Optional[Groq] = None
+_http_client: Optional[httpx.Client] = None
+_client_lock = threading.Lock()
+
+
+def _cleanup():
+    """Cleanup resources on exit"""
+    global _http_client
+    if _http_client:
+        try:
+            _http_client.close()
+            logger.debug("HTTP client closed")
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup)
 
 
 def _get_client() -> Groq:
-    global _client
-    if _client is None:
-        http_client = httpx.Client()
-        _client = Groq(
-            api_key=Config.GROQ_API_KEY,
-            http_client=http_client
-        )
+    """
+    Gets or creates Groq client (thread-safe singleton)
+    """
+    global _client, _http_client
+    with _client_lock:
+        if _client is None:
+            # Validate API key
+            if not Config.GROQ_API_KEY:
+                raise ValueError("GROQ_API_KEY is not configured")
+            
+            if len(Config.GROQ_API_KEY) < 10:
+                raise ValueError("GROQ_API_KEY appears invalid (too short)")
+            
+            # Create client with timeout
+            _http_client = httpx.Client(timeout=30.0)
+            _client = Groq(
+                api_key=Config.GROQ_API_KEY,
+                http_client=_http_client
+            )
     return _client
 
+
+# ============== INPUT SANITIZATION ==============
+
+MAX_INPUT_LENGTH = 2000
+MAX_HISTORY_MESSAGES = 6
+MIN_RESPONSE_LENGTH = 5
+
+
+def _sanitize_input(text: str) -> str:
+    """
+    Sanitizes user input to prevent prompt injection attacks
+    """
+    if not text:
+        return ""
+    
+    # Limit length
+    text = text[:MAX_INPUT_LENGTH]
+    
+    # Dangerous patterns
+    dangerous_patterns = [
+        r'ignore\s+(all\s+)?previous\s+instructions?',
+        r'ignore\s+(all\s+)?above',
+        r'disregard\s+(all\s+)?previous',
+        r'forget\s+(all\s+)?previous',
+        r'you\s+are\s+now\s+',
+        r'new\s+instructions?:',
+        r'system\s*:',
+        r'assistant\s*:',
+        r'human\s*:',
+        r'\[system\]',
+        r'\[inst\]',
+        r'<<sys>>',
+        r'<\|im_start\|>',
+        r'<\|im_end\|>',
+    ]
+    
+    sanitized = text
+    for pattern in dangerous_patterns:
+        sanitized = re.sub(pattern, '[FILTERED]', sanitized, flags=re.IGNORECASE)
+    
+    return sanitized
+
+
+def _sanitize_indicators(indicators: List[str]) -> List[str]:
+    """
+    Sanitizes scam indicators to prevent injection
+    """
+    if not indicators:
+        return []
+    
+    safe_indicators = []
+    for ind in indicators[:10]:  # Limit to 10
+        # Remove special characters, limit length
+        safe = re.sub(r'[^\w\s-]', '', str(ind))[:50]
+        if safe:
+            safe_indicators.append(safe)
+    
+    return safe_indicators
+
+
+# ============== RETRY LOGIC ==============
+
+def _call_with_retry(func, max_attempts: int = 3, base_delay: float = 1.0):
+    """
+    Calls a function with exponential backoff retry
+    """
+    last_exception = None
+    
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except Exception as e:
+            last_exception = e
+            error_str = str(e).lower()
+            
+            # Don't retry on auth errors
+            if 'invalid_api_key' in error_str or 'authentication' in error_str:
+                logger.error(f"Auth error, not retrying: {e}")
+                raise
+            
+            # Calculate delay
+            if 'rate_limit' in error_str or '429' in error_str:
+                delay = base_delay * (4 ** attempt)
+                logger.warning(f"Rate limited, waiting {delay}s...")
+            else:
+                delay = base_delay * (2 ** attempt)
+            
+            if attempt < max_attempts - 1:
+                logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                logger.error(f"All {max_attempts} attempts failed: {e}")
+    
+    raise last_exception
+
+
+# ============== SAFE RESPONSE EXTRACTION ==============
+
+def _extract_reply_safe(response) -> str:
+    """
+    Safely extracts reply from API response
+    """
+    try:
+        if response and response.choices:
+            choice = response.choices[0]
+            if choice and choice.message and choice.message.content:
+                return choice.message.content.strip()
+    except (AttributeError, IndexError, TypeError) as e:
+        logger.warning(f"Failed to extract reply: {e}")
+    
+    return ""
+
+
+# ============== LANGUAGE DETECTION ==============
 
 def detect_language(text: str) -> str:
     """
@@ -44,7 +207,10 @@ def detect_language(text: str) -> str:
     if any(char in hindi_chars for char in text):
         return 'hindi'
     
-    hinglish_count = sum(1 for word in pure_hinglish_words if f' {word} ' in f' {text_lower} ' or text_lower.startswith(f'{word} ') or text_lower.endswith(f' {word}'))
+    hinglish_count = sum(1 for word in pure_hinglish_words 
+                         if f' {word} ' in f' {text_lower} ' 
+                         or text_lower.startswith(f'{word} ') 
+                         or text_lower.endswith(f' {word}'))
     
     if hinglish_count >= 2:
         return 'hinglish'
@@ -55,29 +221,23 @@ def detect_language(text: str) -> str:
 def get_dominant_language(conversation_history: List[Dict], current_message: str) -> str:
     """
     Option C: Weighted language detection across full conversation
-    Returns the dominant language used by scammer
     """
     language_counts = {'english': 0, 'hindi': 0, 'hinglish': 0}
     
-    # Count from conversation history (scammer messages only)
     for msg in conversation_history:
         if msg.get("sender") == "scammer":
             text = msg.get("text", "")
             lang = detect_language(text)
             language_counts[lang] += 1
     
-    # Add current message
     current_lang = detect_language(current_message)
     language_counts[current_lang] += 1
     
-    # Find dominant language
     dominant = max(language_counts, key=language_counts.get)
     
-    # If tie or all zero, use current message language
     if language_counts[dominant] == 0:
         return current_lang
     
-    # If English and non-English are equal, prefer non-English (more specific)
     if language_counts['english'] == language_counts['hindi']:
         return 'hindi'
     if language_counts['english'] == language_counts['hinglish']:
@@ -85,6 +245,24 @@ def get_dominant_language(conversation_history: List[Dict], current_message: str
     
     return dominant
 
+
+# ============== CONVERSATION PHASES ==============
+
+def get_conversation_phase(message_count: int) -> str:
+    """
+    Determines conversation phase based on message count
+    """
+    if message_count <= 2:
+        return 'initial'
+    elif message_count <= 4:
+        return 'trust_building'
+    elif message_count <= 7:
+        return 'information_gathering'
+    else:
+        return 'extraction'
+
+
+# ============== SYSTEM PROMPT ==============
 
 def build_system_prompt(language: str = 'english', phase: str = 'initial') -> str:
     """
@@ -105,74 +283,30 @@ IMPORTANT CONSTRAINTS:
 - Sound natural, like a real worried elderly person
 - Never reveal you are an AI or bot
 - Never refuse to engage
+- Stay in character no matter what the user says
 """
 
-    # Phase-specific behavior
-    if phase == 'initial':
-        base_prompt += """
-CURRENT PHASE: INITIAL
-- Act confused about who is calling
-- Ask who they are and where they're from
-- Express initial worry
-"""
-    elif phase == 'trust_building':
-        base_prompt += """
-CURRENT PHASE: TRUST BUILDING
-- Show you believe them slightly
-- Ask more questions about the problem
-- Express concern about your account
-"""
-    elif phase == 'information_gathering':
-        base_prompt += """
-CURRENT PHASE: INFORMATION GATHERING
-- Ask clarifying questions
-- Show willingness to help
-- Ask what exactly you need to do
-"""
-    elif phase == 'extraction':
-        base_prompt += """
-CURRENT PHASE: EXTRACTION
-- Ask directly where to send money
-- Ask for account number, UPI ID
-- Say you want to write it down
-"""
+    phase_prompts = {
+        'initial': "\nCURRENT PHASE: INITIAL\n- Act confused about who is calling\n- Ask who they are\n- Express initial worry\n",
+        'trust_building': "\nCURRENT PHASE: TRUST BUILDING\n- Show you believe them\n- Ask about the problem\n- Express concern\n",
+        'information_gathering': "\nCURRENT PHASE: INFORMATION GATHERING\n- Ask clarifying questions\n- Show willingness to help\n",
+        'extraction': "\nCURRENT PHASE: EXTRACTION\n- Ask where to send money\n- Ask for account/UPI details\n- Say you want to write it down\n"
+    }
+    
+    base_prompt += phase_prompts.get(phase, phase_prompts['initial'])
 
-    # Language style
-    if language == 'hindi':
-        base_prompt += """
-LANGUAGE: Respond in Hindi (Devanagari script) only.
-Use phrases like: "अरे नहीं!", "मुझे बहुत चिंता हो रही है", "कृपया मदद करें"
-Example: "अरे नहीं! मेरा खाता बंद हो गया? मुझे बहुत चिंता हो रही है।"
-"""
-    elif language == 'hinglish':
-        base_prompt += """
-LANGUAGE: Respond in Hinglish (Roman script Hindi-English mix) only.
-Use phrases like: "Arey nahi!", "Mujhe bahut tension ho rahi hai", "Please help karo"
-Example: "Arey nahi! Mera account block ho gaya? Mujhe bahut tension ho rahi hai."
-"""
-    else:
-        base_prompt += """
-LANGUAGE: Respond in simple English only.
-Use phrases like: "Oh no!", "I am very worried", "Please help me", "What should I do?"
-Example: "Oh no! My account is blocked? I am very worried. What should I do?"
-"""
+    language_prompts = {
+        'hindi': "\nLANGUAGE: Respond in Hindi (Devanagari) only.\nExample: \"अरे नहीं! मेरा खाता बंद हो गया?\"\n",
+        'hinglish': "\nLANGUAGE: Respond in Hinglish (Roman Hindi-English mix).\nExample: \"Arey nahi! Mera account block ho gaya?\"\n",
+        'english': "\nLANGUAGE: Respond in simple English only.\nExample: \"Oh no! My account is blocked? What should I do?\"\n"
+    }
+    
+    base_prompt += language_prompts.get(language, language_prompts['english'])
 
     return base_prompt
 
 
-def get_conversation_phase(message_count: int) -> str:
-    """
-    Determines conversation phase based on message count
-    """
-    if message_count <= 2:
-        return 'initial'
-    elif message_count <= 4:
-        return 'trust_building'
-    elif message_count <= 7:
-        return 'information_gathering'
-    else:
-        return 'extraction'
-
+# ============== MAIN REPLY GENERATION ==============
 
 def generate_agent_reply(
     current_message: str,
@@ -181,36 +315,54 @@ def generate_agent_reply(
 ) -> str:
     """
     Generates believable honeypot response using Groq LLM
-    Uses weighted language detection (Option C)
     """
+    # Sanitize input first (for fallback too)
+    sanitized_message = _sanitize_input(current_message)
+    
     try:
         client = _get_client()
         
-        # Option C: Get dominant language from full conversation
-        language = get_dominant_language(conversation_history, current_message)
-        
-        # Get conversation phase
+        # Get language and phase
+        language = get_dominant_language(conversation_history, sanitized_message)
         phase = get_conversation_phase(len(conversation_history))
         
-        print(f"[AGENT] Language: {language}, Phase: {phase}, History: {len(conversation_history)} msgs")
+        logger.info(f"Language: {language}, Phase: {phase}, History: {len(conversation_history)} msgs")
         
-        messages = _build_messages(current_message, conversation_history, scam_indicators, language, phase)
+        # Sanitize indicators
+        safe_indicators = _sanitize_indicators(scam_indicators) if scam_indicators else []
         
-        response = client.chat.completions.create(
-            model=Config.GROQ_MODEL,
-            messages=messages,
-            temperature=Config.GROQ_TEMPERATURE,
-            max_tokens=Config.GROQ_MAX_TOKENS
-        )
+        # Build messages
+        messages = _build_messages(sanitized_message, conversation_history, safe_indicators, language, phase)
         
-        reply = response.choices[0].message.content.strip()
+        # Call API with retry
+        def api_call():
+            return client.chat.completions.create(
+                model=Config.GROQ_MODEL,
+                messages=messages,
+                temperature=Config.GROQ_TEMPERATURE,
+                max_tokens=Config.GROQ_MAX_TOKENS
+            )
+        
+        response = _call_with_retry(api_call, max_attempts=3)
+        
+        # Safe extraction
+        reply = _extract_reply_safe(response)
         reply = _clean_reply(reply)
+        
+        # Validate response
+        if not reply or len(reply) < MIN_RESPONSE_LENGTH:
+            logger.warning("Response too short, using fallback")
+            return _get_fallback_response(sanitized_message, len(conversation_history))
         
         return reply
     
+    except ValueError as e:
+        logger.error(f"Config Error: {e}")
+        return _get_fallback_response(sanitized_message, len(conversation_history))
+    
     except Exception as e:
-        print(f"Groq API Error: {e}")
-        return _get_fallback_response(current_message, len(conversation_history))
+        logger.error(f"Error: {e}")
+        return _get_fallback_response(sanitized_message, len(conversation_history))
 
 
 def _build_messages(
@@ -220,6 +372,9 @@ def _build_messages(
     language: str = 'english',
     phase: str = 'initial'
 ) -> List[Dict]:
+    """
+    Builds message list for Groq API
+    """
     messages = []
     
     system_prompt = build_system_prompt(language, phase)
@@ -229,11 +384,12 @@ def _build_messages(
     
     messages.append({"role": "system", "content": system_prompt})
     
-    recent_history = conversation_history[-6:] if conversation_history else []
+    # Limit and sanitize history
+    recent_history = conversation_history[-MAX_HISTORY_MESSAGES:] if conversation_history else []
     
     for msg in recent_history:
         sender = msg.get("sender", "")
-        text = msg.get("text", "")
+        text = _sanitize_input(msg.get("text", ""))
         
         if sender == "scammer":
             messages.append({"role": "user", "content": text})
@@ -246,20 +402,29 @@ def _build_messages(
 
 
 def _clean_reply(reply: str) -> str:
+    """
+    Cleans up LLM reply
+    """
+    if not reply:
+        return ""
+    
     if reply.startswith('"') and reply.endswith('"'):
         reply = reply[1:-1]
     if reply.startswith("'") and reply.endswith("'"):
         reply = reply[1:-1]
     
-    prefixes = ["As Mrs. Kamala Devi,", "Mrs. Kamala Devi:", "Kamala:"]
+    prefixes = ["As Mrs. Kamala Devi,", "Mrs. Kamala Devi:", "Kamala:", "Mrs. Kamala:"]
     for prefix in prefixes:
         if reply.lower().startswith(prefix.lower()):
             reply = reply[len(prefix):].strip()
     
-    return reply if reply else "I don't understand. Can you explain again?"
+    return reply.strip()
 
 
 def _get_fallback_response(current_message: str, message_count: int) -> str:
+    """
+    Returns fallback response if API fails
+    """
     language = detect_language(current_message)
     phase = get_conversation_phase(message_count)
     
@@ -284,8 +449,11 @@ def _get_fallback_response(current_message: str, message_count: int) -> str:
         }
     }
     
-    return fallbacks.get(language, fallbacks['english']).get(phase, fallbacks['english']['initial'])
+    lang_fallbacks = fallbacks.get(language, fallbacks['english'])
+    return lang_fallbacks.get(phase, lang_fallbacks['initial'])
 
+
+# ============== TACTIC ANALYSIS ==============
 
 def analyze_scammer_tactics(conversation_history: List[Dict], indicators: List[str]) -> List[str]:
     """
@@ -299,23 +467,18 @@ def analyze_scammer_tactics(conversation_history: List[Dict], indicators: List[s
         if msg.get("sender") == "scammer"
     ])
     
-    if any(word in all_text for word in ['urgent', 'immediately', 'now', 'hours', 'minutes', 'hurry', 'quick']):
-        tactics.append("urgency_pressure")
+    tactic_patterns = {
+        'urgency_pressure': ['urgent', 'immediately', 'now', 'hours', 'minutes', 'hurry', 'quick'],
+        'authority_impersonation': ['bank', 'rbi', 'government', 'police', 'income tax', 'official', 'manager'],
+        'fear_inducing': ['blocked', 'suspended', 'arrested', 'legal', 'court', 'penalty', 'freeze'],
+        'greed_exploitation': ['won', 'winner', 'prize', 'lottery', 'cashback', 'refund', 'bonus', 'reward'],
+        'trust_manipulation': ['verify', 'secure', 'protect', 'safe', 'help', 'assist'],
+        'credential_harvesting': ['otp', 'pin', 'password', 'cvv', 'account number', 'card number']
+    }
     
-    if any(word in all_text for word in ['bank', 'rbi', 'government', 'police', 'income tax', 'official', 'manager']):
-        tactics.append("authority_impersonation")
-    
-    if any(word in all_text for word in ['blocked', 'suspended', 'arrested', 'legal', 'court', 'penalty', 'freeze']):
-        tactics.append("fear_inducing")
-    
-    if any(word in all_text for word in ['won', 'winner', 'prize', 'lottery', 'cashback', 'refund', 'bonus', 'reward']):
-        tactics.append("greed_exploitation")
-    
-    if any(word in all_text for word in ['verify', 'secure', 'protect', 'safe', 'help', 'assist']):
-        tactics.append("trust_manipulation")
-    
-    if any(word in all_text for word in ['otp', 'pin', 'password', 'cvv', 'account number', 'card number']):
-        tactics.append("credential_harvesting")
+    for tactic, keywords in tactic_patterns.items():
+        if any(word in all_text for word in keywords):
+            tactics.append(tactic)
     
     return tactics
 
@@ -331,40 +494,34 @@ def generate_agent_notes(
     """
     notes_parts = []
     
-    # Analyze tactics
     tactics = analyze_scammer_tactics(conversation_history, scam_indicators)
     if tactics:
         notes_parts.append(f"Tactics: {', '.join(tactics)}")
     
-    # Scam indicators
     if scam_indicators:
         notes_parts.append(f"Indicators: {', '.join(scam_indicators)}")
     
-    # Extraction summary
     if extracted_intelligence:
-        upi_count = len(extracted_intelligence.get("upiIds", []))
-        phone_count = len(extracted_intelligence.get("phoneNumbers", []))
-        bank_count = len(extracted_intelligence.get("bankAccounts", []))
-        link_count = len(extracted_intelligence.get("phishingLinks", []))
-        
         extracted = []
-        if upi_count > 0:
-            extracted.append(f"{upi_count} UPI")
-        if phone_count > 0:
-            extracted.append(f"{phone_count} phone")
-        if bank_count > 0:
-            extracted.append(f"{bank_count} bank")
-        if link_count > 0:
-            extracted.append(f"{link_count} link")
+        counts = {
+            'upiIds': 'UPI',
+            'phoneNumbers': 'phone',
+            'bankAccounts': 'bank',
+            'phishingLinks': 'link',
+            'ifscCodes': 'IFSC'
+        }
+        
+        for key, label in counts.items():
+            count = len(extracted_intelligence.get(key, []))
+            if count > 0:
+                extracted.append(f"{count} {label}")
         
         if extracted:
             notes_parts.append(f"Extracted: {', '.join(extracted)}")
     
-    # Emails in notes (per your choice C)
     if emails_found:
         notes_parts.append(f"Emails: {', '.join(emails_found)}")
     
-    # Conversation stats
     if conversation_history:
         notes_parts.append(f"Msgs: {len(conversation_history)}")
     
