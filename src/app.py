@@ -2,8 +2,9 @@
 Flask application - Main API endpoint
 Owner: Member B
 """
+
+import os
 from flask import Flask, request, jsonify, render_template
-from flask import Flask, request, jsonify
 from src.auth import validate_api_key
 from src.session import (
     get_session,
@@ -18,7 +19,6 @@ from src.agent import generate_agent_reply, generate_agent_notes
 from src.callback import send_final_callback
 from src.config import Config
 
-import os
 template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 app = Flask(__name__, template_folder=template_dir)
 
@@ -27,48 +27,12 @@ app = Flask(__name__, template_folder=template_dir)
 def health_check():
     """Health check endpoint for Render"""
     return jsonify({"status": "healthy"}), 200
-@app.route('/chat', methods=['GET'])
-def chat_page():
-    """WhatsApp-style chat interface for testing"""
-    return render_template('chat.html')
 
-@app.route('/', methods=['GET'])
-def home():
-    """Home endpoint"""
-    return jsonify({
-        "status": "running",
-        "service": "Scam Honeypot API",
-        "endpoints": {
-            "health": "/health",
-            "honeypot": "/honeypot (POST)"
-        }
-    }), 200
 
-@app.route('/test', methods=['GET'])
-def test_page():
-    """Test webpage for manual testing"""
-    return render_template('test.html')
-
-@app.route('/honeypot', methods=['POST'])
-def honeypot_endpoint():
+def process_honeypot_request():
     """
-    Main honeypot API endpoint
-    
-    Request format:
-        {
-            "sessionId": "...",
-            "message": {"sender": "scammer", "text": "...", "timestamp": ...},
-            "conversationHistory": [...],
-            "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
-        }
-    
-    Response format:
-        {
-            "status": "success",
-            "reply": "Agent's response..."
-        }
+    Core honeypot logic - shared by / and /honeypot
     """
-    
     # Step 1: Validate API key
     if not validate_api_key(request):
         return jsonify({
@@ -80,34 +44,66 @@ def honeypot_endpoint():
     try:
         data = request.get_json()
         
+        print(f"[HONEYPOT] Received request: {data}")
+        
         if not data:
             return jsonify({
                 "status": "error",
                 "message": "Bad Request: No JSON body provided"
             }), 400
         
-        # Extract required fields
-        session_id = data.get("sessionId")
-        message = data.get("message", {})
-        conversation_history = data.get("conversationHistory", [])
-        metadata = data.get("metadata", {})
+        # Handle different request formats
+        session_id = None
+        scammer_text = None
+        conversation_history = []
+        metadata = {}
         
-        # Validate required fields
-        if not session_id:
+        # Format 1: GUVI format with nested message object
+        if "message" in data and isinstance(data["message"], dict):
+            session_id = data.get("sessionId") or data.get("session_id") or "default-session"
+            scammer_text = data["message"].get("text") or data["message"].get("content")
+            conversation_history = data.get("conversationHistory") or data.get("conversation_history") or []
+            metadata = data.get("metadata") or {}
+        
+        # Format 2: Message as string directly
+        elif "message" in data and isinstance(data["message"], str):
+            session_id = data.get("sessionId") or data.get("session_id") or "default-session"
+            scammer_text = data["message"]
+            conversation_history = data.get("conversationHistory") or data.get("conversation_history") or []
+            metadata = data.get("metadata") or {}
+        
+        # Format 3: Simple format with just text
+        elif "text" in data:
+            session_id = data.get("sessionId") or data.get("session_id") or "default-session"
+            scammer_text = data.get("text")
+            conversation_history = data.get("conversationHistory") or data.get("conversation_history") or []
+            metadata = data.get("metadata") or {}
+        
+        # Format 4: Content field
+        elif "content" in data:
+            session_id = data.get("sessionId") or data.get("session_id") or "default-session"
+            scammer_text = data.get("content")
+            conversation_history = data.get("conversationHistory") or data.get("conversation_history") or []
+            metadata = data.get("metadata") or {}
+        
+        else:
+            print(f"[HONEYPOT] Unexpected request format: {data}")
             return jsonify({
                 "status": "error",
-                "message": "Bad Request: sessionId is required"
+                "message": "Bad Request: Could not parse message"
             }), 400
         
-        if not message or not message.get("text"):
+        if not scammer_text:
+            print(f"[HONEYPOT] No text found in request: {data}")
             return jsonify({
                 "status": "error",
-                "message": "Bad Request: message.text is required"
+                "message": "Bad Request: message text is required"
             }), 400
         
-        scammer_text = message.get("text", "")
+        print(f"[HONEYPOT] Parsed - Session: {session_id}, Text: {scammer_text[:50]}...")
         
     except Exception as e:
+        print(f"[HONEYPOT] Parse error: {e}")
         return jsonify({
             "status": "error",
             "message": f"Bad Request: Invalid JSON - {str(e)}"
@@ -121,7 +117,7 @@ def honeypot_endpoint():
     # Step 4: Detect scam
     is_scam, confidence, indicators = detect_scam(scammer_text, conversation_history)
     
-    # Step 5: Extract intelligence from current message
+    # Step 5: Extract intelligence
     current_intel = extract_intelligence(scammer_text)
     
     # Step 6: Update session with scammer message
@@ -151,20 +147,14 @@ def honeypot_endpoint():
     
     # Step 9: Check if should send callback
     if should_send_callback(session):
-        # Generate agent notes
         agent_notes = generate_agent_notes(
             conversation_history=session.conversation_history,
             scam_indicators=session.indicators,
             extracted_intelligence=session.extracted_intelligence
         )
-        
-        # Send callback to GUVI
         callback_success = send_final_callback(session, agent_notes)
-        
         if callback_success:
             print(f"[HONEYPOT] Callback sent for session {session_id}")
-        
-        # Don't delete session immediately - keep for potential follow-up
     
     # Step 10: Return response
     return jsonify({
@@ -173,9 +163,44 @@ def honeypot_endpoint():
     }), 200
 
 
+@app.route('/', methods=['GET', 'POST'])
+def home():
+    """Home endpoint - handles both GET (info) and POST (honeypot)"""
+    if request.method == 'POST':
+        return process_honeypot_request()
+    
+    return jsonify({
+        "status": "running",
+        "service": "Scam Honeypot API",
+        "endpoints": {
+            "health": "/health",
+            "honeypot": "/ or /honeypot (POST)",
+            "chat": "/chat (Test UI)"
+        }
+    }), 200
+
+
+@app.route('/honeypot', methods=['POST'])
+def honeypot_endpoint():
+    """Main honeypot API endpoint"""
+    return process_honeypot_request()
+
+
+@app.route('/test', methods=['GET'])
+def test_page():
+    """Test webpage for manual testing"""
+    return render_template('test.html')
+
+
+@app.route('/chat', methods=['GET'])
+def chat_page():
+    """WhatsApp-style chat interface for testing"""
+    return render_template('chat.html')
+
+
 @app.route('/debug/session/<session_id>', methods=['GET'])
 def debug_session(session_id):
-    """Debug endpoint to view session data (remove in production)"""
+    """Debug endpoint to view session data"""
     if not validate_api_key(request):
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
     
@@ -200,6 +225,7 @@ def debug_session(session_id):
 @app.errorhandler(500)
 def internal_error(error):
     """Handle internal server errors"""
+    print(f"[ERROR] 500: {error}")
     return jsonify({
         "status": "error",
         "message": "Internal Server Error"
