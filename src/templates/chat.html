@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Honeypot Chat Tester</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #0a0a0a;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .phone {
+            width: 380px;
+            height: 700px;
+            background: #111;
+            border-radius: 30px;
+            border: 3px solid #333;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: #1f2c34;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-bottom: 1px solid #333;
+        }
+        .avatar {
+            width: 45px;
+            height: 45px;
+            background: #00a884;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .contact-info h3 {
+            color: #fff;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        .contact-info span {
+            color: #8696a0;
+            font-size: 12px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background: #00a884;
+            border-radius: 50%;
+            margin-left: auto;
+        }
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #0b141a;
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23111111' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+        .message {
+            max-width: 80%;
+            padding: 8px 12px;
+            border-radius: 10px;
+            margin: 8px 0;
+            position: relative;
+            word-wrap: break-word;
+        }
+        .message .time {
+            font-size: 10px;
+            color: rgba(255,255,255,0.5);
+            text-align: right;
+            margin-top: 4px;
+        }
+        .scammer {
+            background: #1f2c34;
+            color: #fff;
+            margin-right: auto;
+            border-top-left-radius: 0;
+        }
+        .agent {
+            background: #005c4b;
+            color: #fff;
+            margin-left: auto;
+            border-top-right-radius: 0;
+        }
+        .typing {
+            background: #1f2c34;
+            color: #8696a0;
+            padding: 12px 15px;
+            border-radius: 10px;
+            margin-right: auto;
+            font-style: italic;
+        }
+        .typing::after {
+            content: '...';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        .input-area {
+            background: #1f2c34;
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        .input-area textarea {
+            flex: 1;
+            background: #2a3942;
+            border: none;
+            border-radius: 20px;
+            padding: 12px 15px;
+            color: #fff;
+            font-size: 14px;
+            resize: none;
+            max-height: 100px;
+            font-family: inherit;
+        }
+        .input-area textarea:focus {
+            outline: none;
+        }
+        .input-area textarea::placeholder {
+            color: #8696a0;
+        }
+        .send-btn {
+            width: 45px;
+            height: 45px;
+            background: #00a884;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .send-btn:hover { background: #00c49a; }
+        .send-btn:disabled { background: #555; cursor: not-allowed; }
+        .send-btn svg {
+            fill: #fff;
+            width: 20px;
+            height: 20px;
+        }
+        .intel-panel {
+            position: fixed;
+            right: 20px;
+            top: 20px;
+            width: 320px;
+            background: #1a1a2e;
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid #00a884;
+            color: #fff;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .intel-panel h3 {
+            color: #00a884;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .intel-item {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 8px;
+            margin: 8px 0;
+            font-size: 13px;
+        }
+        .intel-item label {
+            color: #00a884;
+            font-size: 11px;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .intel-item .value {
+            color: #fff;
+            font-family: monospace;
+        }
+        .settings {
+            position: fixed;
+            left: 20px;
+            top: 20px;
+            width: 280px;
+            background: #1a1a2e;
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid #333;
+            color: #fff;
+        }
+        .settings h3 {
+            color: #00a884;
+            margin-bottom: 15px;
+        }
+        .settings label {
+            display: block;
+            margin: 10px 0 5px;
+            color: #8696a0;
+            font-size: 12px;
+        }
+        .settings input {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0f3460;
+            border: 1px solid #333;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 13px;
+        }
+        .settings input:focus { outline: 1px solid #00a884; }
+        .clear-btn {
+            width: 100%;
+            padding: 10px;
+            background: #e74c3c;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 13px;
+        }
+        .clear-btn:hover { background: #c0392b; }
+        .templates {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+        .templates h4 {
+            color: #8696a0;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+        .template-btn {
+            display: block;
+            width: 100%;
+            padding: 8px;
+            background: #0f3460;
+            border: 1px solid #333;
+            border-radius: 5px;
+            color: #fff;
+            cursor: pointer;
+            margin: 5px 0;
+            font-size: 11px;
+            text-align: left;
+        }
+        .template-btn:hover {
+            border-color: #00a884;
+            background: #1a4a7a;
+        }
+        .confidence-bar {
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00a884, #00d4ff);
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <!-- Settings Panel -->
+    <div class="settings">
+        <h3>⚙️ Settings</h3>
+        <label>API Key:</label>
+        <input type="text" id="apiKey" value="my_secret_key_123">
+        
+        <label>Session ID:</label>
+        <input type="text" id="sessionId" value="">
+        
+        <button class="clear-btn" onclick="newSession()">🔄 New Session</button>
+        
+        <div class="templates">
+            <h4>📝 Quick Templates (Click to use)</h4>
+            <button class="template-btn" onclick="useTemplate(1)">👋 Hello, is this Mrs. Kamala?</button>
+            <button class="template-btn" onclick="useTemplate(2)">🏦 Your SBI account is blocked!</button>
+            <button class="template-btn" onclick="useTemplate(3)">🎉 Congratulations! You won lottery!</button>
+            <button class="template-btn" onclick="useTemplate(4)">💳 Send Rs 500 to verify@paytm</button>
+            <button class="template-btn" onclick="useTemplate(5)">📞 Call 9876543210 urgently!</button>
+            <button class="template-btn" onclick="useTemplate(6)">🔗 Click bit.ly/verify-now</button>
+        </div>
+    </div>
+
+    <!-- Phone UI -->
+    <div class="phone">
+        <div class="header">
+            <div class="avatar">👵</div>
+            <div class="contact-info">
+                <h3>Mrs. Kamala Devi</h3>
+                <span id="onlineStatus">Online</span>
+            </div>
+            <div class="status-dot"></div>
+        </div>
+        
+        <div class="chat-area" id="chatArea">
+            <div class="message agent">
+                <div>Hello? Who is this?</div>
+                <div class="time">Just now</div>
+            </div>
+        </div>
+        
+        <div class="input-area">
+            <textarea id="messageInput" placeholder="Type a scam message..." rows="1" onkeydown="handleKeyDown(event)"></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Intelligence Panel -->
+    <div class="intel-panel">
+        <h3>🔍 Extracted Intelligence</h3>
+        
+        <div class="intel-item">
+            <label>Scam Detected:</label>
+            <div class="value" id="scamDetected">Waiting...</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>Confidence:</label>
+            <div class="value" id="confidence">0%</div>
+            <div class="confidence-bar">
+                <div class="confidence-fill" id="confidenceBar" style="width: 0%"></div>
+            </div>
+        </div>
+        
+        <div class="intel-item">
+            <label>Messages Exchanged:</label>
+            <div class="value" id="messageCount">0</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>💳 UPI IDs Found:</label>
+            <div class="value" id="upiIds">None</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>🏦 Bank Accounts:</label>
+            <div class="value" id="bankAccounts">None</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>📱 Phone Numbers:</label>
+            <div class="value" id="phoneNumbers">None</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>🔗 Phishing Links:</label>
+            <div class="value" id="phishingLinks">None</div>
+        </div>
+        
+        <div class="intel-item">
+            <label>⚠️ Scam Indicators:</label>
+            <div class="value" id="indicators">None</div>
+        </div>
+    </div>
+
+    <script>
+        let conversationHistory = [];
+        
+        // Generate session ID on load
+        document.getElementById('sessionId').value = 'session-' + Date.now();
+        
+        const templates = {
+            1: "Hello, is this Mrs. Kamala Devi? I'm calling from your bank.",
+            2: "URGENT! Your SBI account has been blocked due to suspicious activity. Verify immediately!",
+            3: "Congratulations! You have won Rs 10,00,000 in Jio Lucky Draw! Claim now!",
+            4: "To verify your account, send Rs 500 to verify@paytm immediately.",
+            5: "Your account will be closed in 1 hour! Call 9876543210 now to prevent this!",
+            6: "Click this link to update your KYC: bit.ly/update-kyc-now or your account will be suspended!"
+        };
+        
+        function useTemplate(num) {
+            document.getElementById('messageInput').value = templates[num];
+            document.getElementById('messageInput').focus();
+        }
+        
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+        
+        function getTime() {
+            return new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        function addMessage(sender, text) {
+            const chatArea = document.getElementById('chatArea');
+            const div = document.createElement('div');
+            div.className = 'message ' + sender;
+            div.innerHTML = `<div>${text}</div><div class="time">${getTime()}</div>`;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+        
+        function showTyping() {
+            const chatArea = document.getElementById('chatArea');
+            const div = document.createElement('div');
+            div.className = 'typing';
+            div.id = 'typingIndicator';
+            div.textContent = 'typing';
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+        
+        function hideTyping() {
+            const typing = document.getElementById('typingIndicator');
+            if (typing) typing.remove();
+        }
+        
+        async function sendMessage() {
+            const apiKey = document.getElementById('apiKey').value;
+            const sessionId = document.getElementById('sessionId').value;
+            const message = document.getElementById('messageInput').value.trim();
+            const btn = document.getElementById('sendBtn');
+            
+            if (!message) return;
+            
+            btn.disabled = true;
+            document.getElementById('messageInput').value = '';
+            
+            // Add scammer message
+            addMessage('scammer', message);
+            
+            // Show typing indicator
+            showTyping();
+            document.getElementById('onlineStatus').textContent = 'typing...';
+            
+            try {
+                const response = await fetch('/honeypot', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': apiKey
+                    },
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        message: {
+                            sender: 'scammer',
+                            text: message,
+                            timestamp: Date.now()
+                        },
+                        conversationHistory: conversationHistory,
+                        metadata: {
+                            channel: 'WhatsApp',
+                            language: 'English',
+                            locale: 'IN'
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Simulate typing delay
+                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1500));
+                
+                hideTyping();
+                document.getElementById('onlineStatus').textContent = 'Online';
+                
+                if (data.status === 'success') {
+                    addMessage('agent', data.reply);
+                    conversationHistory.push({sender: 'scammer', text: message});
+                    conversationHistory.push({sender: 'user', text: data.reply});
+                    
+                    // Fetch and update intelligence
+                    fetchSessionData(sessionId, apiKey);
+                } else {
+                    addMessage('agent', '❌ Error: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                hideTyping();
+                document.getElementById('onlineStatus').textContent = 'Online';
+                addMessage('agent', '❌ Connection error: ' + err.message);
+            }
+            
+            btn.disabled = false;
+            document.getElementById('messageInput').focus();
+        }
+        
+        async function fetchSessionData(sessionId, apiKey) {
+            try {
+                const response = await fetch('/debug/session/' + sessionId, {
+                    headers: { 'x-api-key': apiKey }
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    const s = data.session;
+                    
+                    document.getElementById('scamDetected').textContent = s.scam_detected ? '🚨 YES' : '✅ No';
+                    document.getElementById('scamDetected').style.color = s.scam_detected ? '#e74c3c' : '#00a884';
+                    
+                    const conf = Math.round(s.confidence * 100);
+                    document.getElementById('confidence').textContent = conf + '%';
+                    document.getElementById('confidenceBar').style.width = conf + '%';
+                    
+                    document.getElementById('messageCount').textContent = s.message_count;
+                    
+                    const intel = s.extracted_intelligence;
+                    document.getElementById('upiIds').textContent = intel.upiIds.length ? intel.upiIds.join(', ') : 'None';
+                    document.getElementById('bankAccounts').textContent = intel.bankAccounts.length ? intel.bankAccounts.join(', ') : 'None';
+                    document.getElementById('phoneNumbers').textContent = intel.phoneNumbers.length ? intel.phoneNumbers.join(', ') : 'None';
+                    document.getElementById('phishingLinks').textContent = intel.phishingLinks.length ? intel.phishingLinks.join(', ') : 'None';
+                    document.getElementById('indicators').textContent = s.indicators.length ? s.indicators.join(', ') : 'None';
+                }
+            } catch (err) {
+                console.error('Failed to fetch session:', err);
+            }
+        }
+        
+        function newSession() {
+            document.getElementById('sessionId').value = 'session-' + Date.now();
+            document.getElementById('chatArea').innerHTML = `
+                <div class="message agent">
+                    <div>Hello? Who is this?</div>
+                    <div class="time">${getTime()}</div>
+                </div>
+            `;
+            conversationHistory = [];
+            
+            // Reset intelligence panel
+            document.getElementById('scamDetected').textContent = 'Waiting...';
+            document.getElementById('scamDetected').style.color = '#fff';
+            document.getElementById('confidence').textContent = '0%';
+            document.getElementById('confidenceBar').style.width = '0%';
+            document.getElementById('messageCount').textContent = '0';
+            document.getElementById('upiIds').textContent = 'None';
+            document.getElementById('bankAccounts').textContent = 'None';
+            document.getElementById('phoneNumbers').textContent = 'None';
+            document.getElementById('phishingLinks').textContent = 'None';
+            document.getElementById('indicators').textContent = 'None';
+        }
+    </script>
+</body>
+</html>

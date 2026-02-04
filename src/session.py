@@ -2,9 +2,12 @@
 Session management for multi-turn conversations
 Owner: Member B
 """
+
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+from src.config import Config
+
 
 @dataclass
 class SessionData:
@@ -15,7 +18,14 @@ class SessionData:
     scam_detected: bool = False
     confidence: float = 0.0
     conversation_history: List[Dict] = field(default_factory=list)
-    extracted_intelligence: Dict = field(default_factory=dict)
+    extracted_intelligence: Dict = field(default_factory=lambda: {
+        "upiIds": [],
+        "bankAccounts": [],
+        "phoneNumbers": [],
+        "ifscCodes": [],
+        "phishingLinks": [],
+        "suspiciousKeywords": []
+    })
     indicators: List[str] = field(default_factory=list)
 
 
@@ -33,7 +43,7 @@ def get_session(session_id: str) -> Optional[SessionData]:
     Returns:
         SessionData if exists, None otherwise
     """
-    pass  # Member B implements
+    return _sessions.get(session_id, None)
 
 
 def create_session(session_id: str) -> SessionData:
@@ -46,7 +56,12 @@ def create_session(session_id: str) -> SessionData:
     Returns:
         New SessionData object
     """
-    pass  # Member B implements
+    session = SessionData(
+        session_id=session_id,
+        created_at=datetime.now()
+    )
+    _sessions[session_id] = session
+    return session
 
 
 def update_session(
@@ -68,7 +83,39 @@ def update_session(
     Returns:
         Updated SessionData
     """
-    pass  # Member B implements
+    session = get_session(session_id)
+    
+    if session is None:
+        session = create_session(session_id)
+    
+    if message_count is not None:
+        session.message_count = message_count
+    
+    if scam_detected is not None:
+        session.scam_detected = scam_detected
+    
+    if confidence is not None:
+        session.confidence = confidence
+    
+    if new_message is not None:
+        session.conversation_history.append(new_message)
+    
+    if extracted_intelligence is not None:
+        # Merge new intelligence with existing
+        for key in session.extracted_intelligence:
+            if key in extracted_intelligence:
+                # Add new items, avoid duplicates
+                existing = set(session.extracted_intelligence[key])
+                new_items = set(extracted_intelligence[key])
+                session.extracted_intelligence[key] = list(existing.union(new_items))
+    
+    if indicators is not None:
+        # Merge indicators, avoid duplicates
+        existing = set(session.indicators)
+        new_items = set(indicators)
+        session.indicators = list(existing.union(new_items))
+    
+    return session
 
 
 def should_send_callback(session: SessionData) -> bool:
@@ -85,7 +132,24 @@ def should_send_callback(session: SessionData) -> bool:
     Returns:
         True if should send callback, False otherwise
     """
-    pass  # Member B implements
+    # Check message count
+    if session.message_count >= Config.MAX_MESSAGES:
+        return True
+    
+    # Count total extracted items (excluding keywords)
+    intel = session.extracted_intelligence
+    total_items = (
+        len(intel.get("upiIds", [])) +
+        len(intel.get("bankAccounts", [])) +
+        len(intel.get("phoneNumbers", [])) +
+        len(intel.get("ifscCodes", [])) +
+        len(intel.get("phishingLinks", []))
+    )
+    
+    if total_items >= Config.MIN_INTELLIGENCE_FOR_CALLBACK:
+        return True
+    
+    return False
 
 
 def delete_session(session_id: str) -> bool:
@@ -98,4 +162,29 @@ def delete_session(session_id: str) -> bool:
     Returns:
         True if deleted, False if not found
     """
-    pass  # Member B implements
+    if session_id in _sessions:
+        del _sessions[session_id]
+        return True
+    return False
+
+
+def get_all_sessions() -> Dict[str, SessionData]:
+    """
+    Returns all active sessions (for debugging)
+    
+    Returns:
+        Dictionary of all sessions
+    """
+    return _sessions.copy()
+
+
+def clear_all_sessions() -> int:
+    """
+    Clears all sessions (for testing)
+    
+    Returns:
+        Number of sessions cleared
+    """
+    count = len(_sessions)
+    _sessions.clear()
+    return count

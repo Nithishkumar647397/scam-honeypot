@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scam Honeypot Tester</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 { 
+            color: #00d4ff; 
+            text-align: center;
+            border-bottom: 2px solid #00d4ff;
+            padding-bottom: 10px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: #16213e;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #0f3460;
+        }
+        h3 { color: #00d4ff; margin-top: 0; }
+        label { display: block; margin: 10px 0 5px; color: #aaa; }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 5px;
+            background: #0f3460;
+            color: #fff;
+            font-size: 14px;
+        }
+        textarea { height: 100px; resize: vertical; }
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 15px;
+            background: #00d4ff;
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:hover { background: #00a8cc; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        .chat-box {
+            height: 300px;
+            overflow-y: auto;
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            max-width: 85%;
+        }
+        .scammer {
+            background: #e74c3c;
+            color: white;
+            margin-right: auto;
+        }
+        .agent {
+            background: #27ae60;
+            color: white;
+            margin-left: auto;
+        }
+        .message-label {
+            font-size: 11px;
+            opacity: 0.8;
+            margin-bottom: 3px;
+        }
+        .intel-box {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .status { 
+            padding: 10px; 
+            border-radius: 5px; 
+            margin-top: 10px;
+            text-align: center;
+        }
+        .status.success { background: #27ae60; }
+        .status.error { background: #e74c3c; }
+        .quick-btns { display: flex; gap: 5px; flex-wrap: wrap; margin: 10px 0; }
+        .quick-btn {
+            padding: 5px 10px;
+            background: #0f3460;
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .quick-btn:hover { background: #00d4ff; color: #000; }
+    </style>
+</head>
+<body>
+    <h1>🍯 Scam Honeypot Tester</h1>
+    
+    <div class="container">
+        <!-- Left Panel: Input -->
+        <div class="panel">
+            <h3>📤 Send Scam Message</h3>
+            
+            <label>API Key:</label>
+            <input type="text" id="apiKey" value="my_secret_key_123">
+            
+            <label>Session ID:</label>
+            <input type="text" id="sessionId" value="test-session-001">
+            
+            <label>Scam Message:</label>
+            <textarea id="scamMessage" placeholder="Enter scam message...">URGENT! Your SBI account is blocked. Send Rs 500 to verify@paytm immediately!</textarea>
+            
+            <label>Quick Templates:</label>
+            <div class="quick-btns">
+                <button class="quick-btn" onclick="setTemplate(1)">Bank Block</button>
+                <button class="quick-btn" onclick="setTemplate(2)">Lottery Win</button>
+                <button class="quick-btn" onclick="setTemplate(3)">KYC Update</button>
+                <button class="quick-btn" onclick="setTemplate(4)">UPI Request</button>
+            </div>
+            
+            <button id="sendBtn" onclick="sendMessage()">Send Message</button>
+            <button onclick="clearChat()" style="background: #e74c3c; margin-top: 5px;">Clear Chat</button>
+            
+            <div id="status"></div>
+        </div>
+        
+        <!-- Right Panel: Chat -->
+        <div class="panel">
+            <h3>💬 Conversation</h3>
+            <div class="chat-box" id="chatBox"></div>
+            
+            <h3>🔍 Extracted Intelligence</h3>
+            <div class="intel-box" id="intelBox">No intelligence extracted yet...</div>
+        </div>
+    </div>
+
+    <script>
+        let conversationHistory = [];
+        
+        const templates = {
+            1: "URGENT! Your SBI account is blocked due to suspicious activity. Verify immediately by clicking: bit.ly/sbi-verify",
+            2: "Congratulations! You won Rs 50,00,000 in Jio Lucky Draw! Send Rs 500 processing fee to claim@paytm to claim your prize!",
+            3: "Dear customer, your KYC is pending. Your account will be suspended in 24 hours. Update now: Call 9876543210",
+            4: "Send Rs 1000 to unlock your frozen account. UPI: security@ybl Account: 123456789012 IFSC: SBIN0001234"
+        };
+        
+        function setTemplate(num) {
+            document.getElementById('scamMessage').value = templates[num];
+        }
+        
+        async function sendMessage() {
+            const apiKey = document.getElementById('apiKey').value;
+            const sessionId = document.getElementById('sessionId').value;
+            const message = document.getElementById('scamMessage').value;
+            const btn = document.getElementById('sendBtn');
+            
+            if (!message.trim()) {
+                showStatus('Please enter a message', 'error');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = 'Sending...';
+            
+            // Add scammer message to chat
+            addToChat('scammer', message);
+            
+            try {
+                const response = await fetch('/honeypot', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': apiKey
+                    },
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        message: {
+                            sender: 'scammer',
+                            text: message,
+                            timestamp: Date.now()
+                        },
+                        conversationHistory: conversationHistory,
+                        metadata: {
+                            channel: 'WebTest',
+                            language: 'English',
+                            locale: 'IN'
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    addToChat('agent', data.reply);
+                    conversationHistory.push({sender: 'scammer', text: message});
+                    conversationHistory.push({sender: 'user', text: data.reply});
+                    showStatus('Message sent successfully!', 'success');
+                    
+                    // Fetch session data
+                    fetchSessionData(sessionId, apiKey);
+                } else {
+                    showStatus(data.message || 'Error occurred', 'error');
+                }
+            } catch (err) {
+                showStatus('Error: ' + err.message, 'error');
+            }
+            
+            btn.disabled = false;
+            btn.textContent = 'Send Message';
+            document.getElementById('scamMessage').value = '';
+        }
+        
+        async function fetchSessionData(sessionId, apiKey) {
+            try {
+                const response = await fetch('/debug/session/' + sessionId, {
+                    headers: { 'x-api-key': apiKey }
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    document.getElementById('intelBox').textContent = JSON.stringify(data.session.extracted_intelligence, null, 2);
+                }
+            } catch (err) {
+                console.error('Failed to fetch session:', err);
+            }
+        }
+        
+        function addToChat(sender, text) {
+            const chatBox = document.getElementById('chatBox');
+            const div = document.createElement('div');
+            div.className = 'message ' + sender;
+            div.innerHTML = '<div class="message-label">' + (sender === 'scammer' ? '🔴 Scammer' : '🟢 Honeypot Agent') + '</div>' + text;
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        
+        function showStatus(msg, type) {
+            const status = document.getElementById('status');
+            status.textContent = msg;
+            status.className = 'status ' + type;
+            setTimeout(() => status.textContent = '', 3000);
+        }
+        
+        function clearChat() {
+            document.getElementById('chatBox').innerHTML = '';
+            document.getElementById('intelBox').textContent = 'No intelligence extracted yet...';
+            conversationHistory = [];
+            document.getElementById('sessionId').value = 'test-session-' + Date.now();
+        }
+    </script>
+</body>
+</html>
