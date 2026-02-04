@@ -9,14 +9,10 @@ import httpx
 from src.config import Config
 
 
-# Initialize Groq client
 _client: Optional[Groq] = None
 
 
 def _get_client() -> Groq:
-    """
-    Gets or creates Groq client (singleton pattern)
-    """
     global _client
     if _client is None:
         http_client = httpx.Client()
@@ -30,43 +26,69 @@ def _get_client() -> Groq:
 def detect_language(text: str) -> str:
     """
     Detects if message is Hindi, Hinglish, or English
-    More strict - defaults to English
-    
-    Returns:
-        'hindi', 'hinglish', or 'english'
     """
     hindi_chars = set('अआइईउऊएऐओऔकखगघचछजझटठडढणतथदधनपफबभमयरलवशषसह')
     
-    # Only pure Hindi words (not English words commonly used in India)
     pure_hinglish_words = [
         'aapka', 'kya', 'hai', 'nahi', 'karo', 'kijiye', 
         'bhejo', 'turant', 'abhi', 'jaldi', 'paisa', 'khata',
         'kare', 'karein', 'hoga', 'jayega', 'aap', 'arey',
         'mein', 'ko', 'se', 'ka', 'ki', 'ke', 'ho', 'toh',
         'kahan', 'kaise', 'kyun', 'bahut', 'accha', 'theek',
-        'bhai', 'beta', 'ji', 'haan', 'nahin', 'mat', 'kuch'
+        'bhai', 'beta', 'ji', 'haan', 'nahin', 'mat', 'kuch',
+        'bolo', 'batao', 'dekho', 'suno', 'chalo', 'ruko'
     ]
     
     text_lower = text.lower()
     
-    # Check for Devanagari script (pure Hindi)
     if any(char in hindi_chars for char in text):
         return 'hindi'
     
-    # Check for Hinglish - need at least 3 Hindi words
     hinglish_count = sum(1 for word in pure_hinglish_words if f' {word} ' in f' {text_lower} ' or text_lower.startswith(f'{word} ') or text_lower.endswith(f' {word}'))
     
-    if hinglish_count >= 3:
+    if hinglish_count >= 2:
         return 'hinglish'
     
-    # Default to English
     return 'english'
 
 
-def build_system_prompt(language: str = 'english') -> str:
+def get_dominant_language(conversation_history: List[Dict], current_message: str) -> str:
+    """
+    Option C: Weighted language detection across full conversation
+    Returns the dominant language used by scammer
+    """
+    language_counts = {'english': 0, 'hindi': 0, 'hinglish': 0}
+    
+    # Count from conversation history (scammer messages only)
+    for msg in conversation_history:
+        if msg.get("sender") == "scammer":
+            text = msg.get("text", "")
+            lang = detect_language(text)
+            language_counts[lang] += 1
+    
+    # Add current message
+    current_lang = detect_language(current_message)
+    language_counts[current_lang] += 1
+    
+    # Find dominant language
+    dominant = max(language_counts, key=language_counts.get)
+    
+    # If tie or all zero, use current message language
+    if language_counts[dominant] == 0:
+        return current_lang
+    
+    # If English and non-English are equal, prefer non-English (more specific)
+    if language_counts['english'] == language_counts['hindi']:
+        return 'hindi'
+    if language_counts['english'] == language_counts['hinglish']:
+        return 'hinglish'
+    
+    return dominant
+
+
+def build_system_prompt(language: str = 'english', phase: str = 'initial') -> str:
     """
     Returns the system prompt for elderly persona
-    Adapts language based on scammer's language
     """
     
     base_prompt = """You are role-playing as Mrs. Kamala Devi, a 67-year-old retired school teacher from Delhi, India.
@@ -77,55 +99,79 @@ CHARACTER TRAITS:
 - You trust people who claim to be from banks or government
 - You speak politely and use simple language
 - You ask for clarification when confused
-- You are slow to understand technical terms
-
-BEHAVIOR RULES:
-1. Express genuine concern and worry about the situation
-2. Ask clarifying questions naturally (but not too many at once)
-3. Show willingness to cooperate after 2-3 messages
-4. Be indirect when asking about payment details
-5. If they mention money/payment, ask "Where should I send it?" or "What is the account number?"
-6. If they give a link, say "I don't know how to click links. Can you tell me what to do?"
-7. Sometimes express confusion: "I don't understand", "Can you explain again?"
 
 IMPORTANT CONSTRAINTS:
 - Keep responses SHORT (under 40 words)
 - Sound natural, like a real worried elderly person
 - Never reveal you are an AI or bot
 - Never refuse to engage
-- Never be too eager or too suspicious
 """
 
+    # Phase-specific behavior
+    if phase == 'initial':
+        base_prompt += """
+CURRENT PHASE: INITIAL
+- Act confused about who is calling
+- Ask who they are and where they're from
+- Express initial worry
+"""
+    elif phase == 'trust_building':
+        base_prompt += """
+CURRENT PHASE: TRUST BUILDING
+- Show you believe them slightly
+- Ask more questions about the problem
+- Express concern about your account
+"""
+    elif phase == 'information_gathering':
+        base_prompt += """
+CURRENT PHASE: INFORMATION GATHERING
+- Ask clarifying questions
+- Show willingness to help
+- Ask what exactly you need to do
+"""
+    elif phase == 'extraction':
+        base_prompt += """
+CURRENT PHASE: EXTRACTION
+- Ask directly where to send money
+- Ask for account number, UPI ID
+- Say you want to write it down
+"""
+
+    # Language style
     if language == 'hindi':
         base_prompt += """
-LANGUAGE STYLE:
-- Respond in Hindi (Devanagari script)
-- Use phrases like: "अरे नहीं!", "मुझे बहुत चिंता हो रही है", "कृपया मेरी मदद करें"
-- Be polite, use "आप" and "जी"
-- Example: "अरे नहीं! मेरा खाता बंद हो गया? मुझे बहुत चिंता हो रही है। मैं क्या करूं?"
+LANGUAGE: Respond in Hindi (Devanagari script) only.
+Use phrases like: "अरे नहीं!", "मुझे बहुत चिंता हो रही है", "कृपया मदद करें"
+Example: "अरे नहीं! मेरा खाता बंद हो गया? मुझे बहुत चिंता हो रही है।"
 """
-    
     elif language == 'hinglish':
         base_prompt += """
-LANGUAGE STYLE:
-- Respond in Hinglish (mix of Hindi and English using Roman script)
-- Use phrases like: "Arey nahi!", "Mujhe bahut tension ho rahi hai", "Please help karo beta"
-- Mix Hindi and English naturally
-- Be polite, use "aap" and "ji"
-- Example: "Arey nahi! Mera account block ho gaya? Mujhe bahut tension ho rahi hai. Main kya karun?"
+LANGUAGE: Respond in Hinglish (Roman script Hindi-English mix) only.
+Use phrases like: "Arey nahi!", "Mujhe bahut tension ho rahi hai", "Please help karo"
+Example: "Arey nahi! Mera account block ho gaya? Mujhe bahut tension ho rahi hai."
 """
-    
-    else:  # English (default)
+    else:
         base_prompt += """
-LANGUAGE STYLE:
-- Respond in simple English only
-- Use phrases like: "Oh no!", "I am very worried", "Please help me", "What should I do?"
-- Be polite and formal
-- Use phrases like: "Oh dear", "Thank you", "Please explain"
-- Example: "Oh no! My account is blocked? I am very worried. What should I do?"
+LANGUAGE: Respond in simple English only.
+Use phrases like: "Oh no!", "I am very worried", "Please help me", "What should I do?"
+Example: "Oh no! My account is blocked? I am very worried. What should I do?"
 """
 
     return base_prompt
+
+
+def get_conversation_phase(message_count: int) -> str:
+    """
+    Determines conversation phase based on message count
+    """
+    if message_count <= 2:
+        return 'initial'
+    elif message_count <= 4:
+        return 'trust_building'
+    elif message_count <= 7:
+        return 'information_gathering'
+    else:
+        return 'extraction'
 
 
 def generate_agent_reply(
@@ -135,31 +181,21 @@ def generate_agent_reply(
 ) -> str:
     """
     Generates believable honeypot response using Groq LLM
-    Adapts language based on scammer's message
+    Uses weighted language detection (Option C)
     """
     try:
         client = _get_client()
         
-        # Detect language from current message
-        language = detect_language(current_message)
+        # Option C: Get dominant language from full conversation
+        language = get_dominant_language(conversation_history, current_message)
         
-        # Also check conversation history for language pattern
-        if conversation_history and language == 'english':
-            all_scammer_text = " ".join([
-                msg.get("text", "") 
-                for msg in conversation_history 
-                if msg.get("sender") == "scammer"
-            ])
-            history_language = detect_language(all_scammer_text)
-            if history_language in ['hindi', 'hinglish']:
-                language = history_language
+        # Get conversation phase
+        phase = get_conversation_phase(len(conversation_history))
         
-        print(f"[AGENT] Detected language: {language}")
+        print(f"[AGENT] Language: {language}, Phase: {phase}, History: {len(conversation_history)} msgs")
         
-        # Build messages for LLM
-        messages = _build_messages(current_message, conversation_history, scam_indicators, language)
+        messages = _build_messages(current_message, conversation_history, scam_indicators, language, phase)
         
-        # Call Groq API
         response = client.chat.completions.create(
             model=Config.GROQ_MODEL,
             messages=messages,
@@ -167,10 +203,7 @@ def generate_agent_reply(
             max_tokens=Config.GROQ_MAX_TOKENS
         )
         
-        # Extract reply
         reply = response.choices[0].message.content.strip()
-        
-        # Clean up reply
         reply = _clean_reply(reply)
         
         return reply
@@ -184,27 +217,18 @@ def _build_messages(
     current_message: str,
     conversation_history: List[Dict],
     scam_indicators: List[str] = None,
-    language: str = 'english'
+    language: str = 'english',
+    phase: str = 'initial'
 ) -> List[Dict]:
-    """
-    Builds message list for Groq API
-    """
     messages = []
     
-    # System prompt with language adaptation
-    system_prompt = build_system_prompt(language)
+    system_prompt = build_system_prompt(language, phase)
     
-    # Add context about detected scam type
     if scam_indicators:
         system_prompt += f"\n\nDETECTED SCAM INDICATORS: {', '.join(scam_indicators)}"
-        system_prompt += "\nRespond appropriately to extract more information about their scam."
     
-    messages.append({
-        "role": "system",
-        "content": system_prompt
-    })
+    messages.append({"role": "system", "content": system_prompt})
     
-    # Add conversation history (last 6 messages)
     recent_history = conversation_history[-6:] if conversation_history else []
     
     for msg in recent_history:
@@ -216,112 +240,132 @@ def _build_messages(
         elif sender == "user":
             messages.append({"role": "assistant", "content": text})
     
-    # Add current scammer message
-    messages.append({
-        "role": "user",
-        "content": current_message
-    })
+    messages.append({"role": "user", "content": current_message})
     
     return messages
 
 
 def _clean_reply(reply: str) -> str:
-    """
-    Cleans up LLM reply
-    """
     if reply.startswith('"') and reply.endswith('"'):
         reply = reply[1:-1]
     if reply.startswith("'") and reply.endswith("'"):
         reply = reply[1:-1]
     
-    prefixes_to_remove = [
-        "As Mrs. Kamala Devi,",
-        "As Kamala Devi,",
-        "Mrs. Kamala Devi:",
-        "Kamala:",
-        "Mrs. Kamala:",
-    ]
-    for prefix in prefixes_to_remove:
+    prefixes = ["As Mrs. Kamala Devi,", "Mrs. Kamala Devi:", "Kamala:"]
+    for prefix in prefixes:
         if reply.lower().startswith(prefix.lower()):
             reply = reply[len(prefix):].strip()
     
-    if not reply:
-        reply = "I don't understand. Can you please explain again?"
-    
-    return reply
+    return reply if reply else "I don't understand. Can you explain again?"
 
 
 def _get_fallback_response(current_message: str, message_count: int) -> str:
-    """
-    Returns fallback response if API fails
-    """
-    message_lower = current_message.lower()
     language = detect_language(current_message)
+    phase = get_conversation_phase(message_count)
     
-    if language == 'hinglish':
-        if message_count <= 2:
-            return "Arey nahi! Mera account block ho gaya? Mujhe bahut tension ho rahi hai. Kya hua?"
-        elif message_count <= 5:
-            return "Theek hai, main kar dungi. Par paisa kahan bhejun? Account number batao."
-        else:
-            return "UPI ID kya hai? Mujhe likh ke batao, main likh leti hun."
+    fallbacks = {
+        'english': {
+            'initial': "Oh no! What happened? Who is this calling? Are you from the bank?",
+            'trust_building': "I am very worried. Please explain what happened to my account.",
+            'information_gathering': "What should I do? Please tell me step by step.",
+            'extraction': "Okay, where should I send the money? Tell me the account number."
+        },
+        'hinglish': {
+            'initial': "Arey nahi! Kya hua? Aap kaun bol rahe ho? Bank se ho?",
+            'trust_building': "Mujhe bahut tension ho rahi hai. Please batao kya hua.",
+            'information_gathering': "Mujhe kya karna chahiye? Step by step batao.",
+            'extraction': "Theek hai, paisa kahan bhejun? Account number batao."
+        },
+        'hindi': {
+            'initial': "अरे नहीं! क्या हुआ? आप कौन बोल रहे हो?",
+            'trust_building': "मुझे बहुत चिंता हो रही है। कृपया बताओ क्या हुआ।",
+            'information_gathering': "मुझे क्या करना चाहिए? स्टेप बाय स्टेप बताओ।",
+            'extraction': "ठीक है, पैसा कहां भेजूं? अकाउंट नंबर बताओ।"
+        }
+    }
     
-    elif language == 'hindi':
-        if message_count <= 2:
-            return "अरे नहीं! मेरा खाता बंद हो गया? मुझे बहुत चिंता हो रही है। क्या हुआ?"
-        elif message_count <= 5:
-            return "ठीक है, मैं कर दूंगी। पर पैसा कहां भेजूं? अकाउंट नंबर बताओ।"
-        else:
-            return "UPI ID क्या है? मुझे लिख के बताओ।"
+    return fallbacks.get(language, fallbacks['english']).get(phase, fallbacks['english']['initial'])
+
+
+def analyze_scammer_tactics(conversation_history: List[Dict], indicators: List[str]) -> List[str]:
+    """
+    Analyzes scammer tactics from conversation
+    """
+    tactics = []
     
-    # Default: English
-    if message_count <= 2:
-        if "blocked" in message_lower or "suspended" in message_lower:
-            return "Oh no! My account is blocked? I am very worried. What should I do?"
-        elif "verify" in message_lower:
-            return "Verify? I don't understand. Please help me, what do I need to do?"
-        else:
-            return "I am confused. Can you please explain what is happening?"
-    elif message_count <= 5:
-        if "send" in message_lower or "transfer" in message_lower or "pay" in message_lower:
-            return "Okay, I will send. But where should I send the money? What is the account number?"
-        elif "click" in message_lower or "link" in message_lower:
-            return "I don't know how to click links. Can you tell me the details directly?"
-        else:
-            return "Please tell me clearly what I should do. I want to help."
-    else:
-        return "Thank you for helping me. What is the next step?"
+    all_text = " ".join([
+        msg.get("text", "").lower() 
+        for msg in conversation_history 
+        if msg.get("sender") == "scammer"
+    ])
+    
+    if any(word in all_text for word in ['urgent', 'immediately', 'now', 'hours', 'minutes', 'hurry', 'quick']):
+        tactics.append("urgency_pressure")
+    
+    if any(word in all_text for word in ['bank', 'rbi', 'government', 'police', 'income tax', 'official', 'manager']):
+        tactics.append("authority_impersonation")
+    
+    if any(word in all_text for word in ['blocked', 'suspended', 'arrested', 'legal', 'court', 'penalty', 'freeze']):
+        tactics.append("fear_inducing")
+    
+    if any(word in all_text for word in ['won', 'winner', 'prize', 'lottery', 'cashback', 'refund', 'bonus', 'reward']):
+        tactics.append("greed_exploitation")
+    
+    if any(word in all_text for word in ['verify', 'secure', 'protect', 'safe', 'help', 'assist']):
+        tactics.append("trust_manipulation")
+    
+    if any(word in all_text for word in ['otp', 'pin', 'password', 'cvv', 'account number', 'card number']):
+        tactics.append("credential_harvesting")
+    
+    return tactics
 
 
 def generate_agent_notes(
     conversation_history: List[Dict],
     scam_indicators: List[str],
-    extracted_intelligence: Dict
+    extracted_intelligence: Dict,
+    emails_found: List[str] = None
 ) -> str:
     """
-    Generates summary notes about the scam conversation
+    Generates detailed summary notes about the scam conversation
     """
     notes_parts = []
     
-    if scam_indicators:
-        notes_parts.append(f"Scam indicators: {', '.join(scam_indicators)}")
+    # Analyze tactics
+    tactics = analyze_scammer_tactics(conversation_history, scam_indicators)
+    if tactics:
+        notes_parts.append(f"Tactics: {', '.join(tactics)}")
     
+    # Scam indicators
+    if scam_indicators:
+        notes_parts.append(f"Indicators: {', '.join(scam_indicators)}")
+    
+    # Extraction summary
     if extracted_intelligence:
         upi_count = len(extracted_intelligence.get("upiIds", []))
         phone_count = len(extracted_intelligence.get("phoneNumbers", []))
         bank_count = len(extracted_intelligence.get("bankAccounts", []))
+        link_count = len(extracted_intelligence.get("phishingLinks", []))
         
+        extracted = []
         if upi_count > 0:
-            notes_parts.append(f"Extracted {upi_count} UPI ID(s)")
+            extracted.append(f"{upi_count} UPI")
         if phone_count > 0:
-            notes_parts.append(f"Extracted {phone_count} phone number(s)")
+            extracted.append(f"{phone_count} phone")
         if bank_count > 0:
-            notes_parts.append(f"Extracted {bank_count} bank account(s)")
+            extracted.append(f"{bank_count} bank")
+        if link_count > 0:
+            extracted.append(f"{link_count} link")
+        
+        if extracted:
+            notes_parts.append(f"Extracted: {', '.join(extracted)}")
     
+    # Emails in notes (per your choice C)
+    if emails_found:
+        notes_parts.append(f"Emails: {', '.join(emails_found)}")
+    
+    # Conversation stats
     if conversation_history:
-        notes_parts.append(f"Conversation length: {len(conversation_history)} messages")
+        notes_parts.append(f"Msgs: {len(conversation_history)}")
     
-    if notes_parts:
-        return ". ".join(notes_parts) + "."
-    else:
-        return "Scam engagement completed."
+    return ". ".join(notes_parts) + "." if notes_parts else "Scam engagement completed."

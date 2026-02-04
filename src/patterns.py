@@ -238,3 +238,36 @@ def find_scam_keywords(text: str) -> List[str]:
             found.append(keyword.lower())
     
     return list(set(found))
+
+# Email pattern
+EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+def find_emails(text: str) -> List[str]:
+    """
+    Extract email addresses from text
+    
+    Args:
+        text: Input text to search
+    
+    Returns:
+        List of unique emails found
+    
+    Example:
+        >>> find_emails("Contact scammer@gmail.com for details")
+        ['scammer@gmail.com']
+    """
+    if not text:
+        return []
+    
+    matches = re.findall(EMAIL_PATTERN, text, re.IGNORECASE)
+    
+    # Filter out UPI IDs (they look like emails but use bank domains)
+    upi_domains = ['paytm', 'ybl', 'oksbi', 'okaxis', 'okhdfcbank', 'okicici', 'upi', 'gpay', 'phonepe']
+    
+    filtered = []
+    for email in matches:
+        domain = email.split('@')[1].lower().split('.')[0]
+        if domain not in upi_domains:
+            filtered.append(email.lower())
+    
+    return list(set(filtered))

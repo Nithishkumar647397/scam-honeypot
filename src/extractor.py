@@ -10,98 +10,99 @@ from src.patterns import (
     find_phone_numbers,
     find_ifsc_codes,
     find_urls,
-    find_scam_keywords
+    find_scam_keywords,
+    find_emails
 )
+
+
+def normalize_text(text: str) -> str:
+    """
+    Normalizes obfuscated text for better extraction
+    
+    Converts:
+        - "nine eight seven" → "987"
+        - "at" → "@"
+        - Spaced numbers → joined numbers
+    """
+    if not text:
+        return ""
+    
+    # Number words to digits
+    number_words = {
+        'zero': '0', 'one': '1', 'two': '2', 'three': '3',
+        'four': '4', 'five': '5', 'six': '6', 'seven': '7',
+        'eight': '8', 'nine': '9', 'ten': '10'
+    }
+    
+    normalized = text.lower()
+    
+    # Replace number words
+    for word, digit in number_words.items():
+        normalized = normalized.replace(word, digit)
+    
+    # "at" to "@" (for emails/UPIs)
+    normalized = normalized.replace(' at ', '@')
+    normalized = normalized.replace(' AT ', '@')
+    
+    # Remove spaces between digits (9 8 7 6 → 9876)
+    import re
+    normalized = re.sub(r'(\d)\s+(?=\d)', r'\1', normalized)
+    
+    return normalized
 
 
 def extract_intelligence(message: str) -> Dict[str, List[str]]:
     """
     Extracts scam intelligence from a single message
-    
-    Args:
-        message: Text to analyze
-    
-    Returns:
-        Dict with extracted intelligence:
-            - upiIds: List of UPI IDs found
-            - bankAccounts: List of bank account numbers
-            - phoneNumbers: List of phone numbers
-            - ifscCodes: List of IFSC codes
-            - phishingLinks: List of suspicious URLs
-            - suspiciousKeywords: List of scam-related keywords
-    
-    Example:
-        >>> extract_intelligence("Send money to fraud@paytm or call 9876543210")
-        {
-            "upiIds": ["fraud@paytm"],
-            "bankAccounts": [],
-            "phoneNumbers": ["9876543210"],
-            "ifscCodes": [],
-            "phishingLinks": [],
-            "suspiciousKeywords": ["send money"]
-        }
+    Applies normalization for obfuscated text
     """
     if not message:
         return _empty_intelligence()
     
+    # Extract from original text
+    original_intel = _extract_from_text(message)
+    
+    # Also extract from normalized text (for obfuscated data)
+    normalized = normalize_text(message)
+    if normalized != message.lower():
+        normalized_intel = _extract_from_text(normalized)
+        # Merge results
+        original_intel = merge_intelligence(original_intel, normalized_intel)
+    
+    return original_intel
+
+
+def _extract_from_text(text: str) -> Dict[str, List[str]]:
+    """
+    Core extraction logic
+    """
     return {
-        "upiIds": find_upi_ids(message),
-        "bankAccounts": find_bank_accounts(message),
-        "phoneNumbers": find_phone_numbers(message),
-        "ifscCodes": find_ifsc_codes(message),
-        "phishingLinks": find_urls(message),
-        "suspiciousKeywords": find_scam_keywords(message)
+        "upiIds": find_upi_ids(text),
+        "bankAccounts": find_bank_accounts(text),
+        "phoneNumbers": find_phone_numbers(text),
+        "ifscCodes": find_ifsc_codes(text),
+        "phishingLinks": find_urls(text),
+        "suspiciousKeywords": find_scam_keywords(text),
+        "emails": find_emails(text)
     }
 
 
 def extract_from_conversation(conversation_history: list) -> Dict[str, List[str]]:
     """
     Extracts intelligence from entire conversation history
-    
-    Args:
-        conversation_history: List of message dicts with 'sender' and 'text'
-            Example: [
-                {"sender": "scammer", "text": "Your account is blocked"},
-                {"sender": "user", "text": "What should I do?"}
-            ]
-    
-    Returns:
-        Aggregated intelligence dict (same format as extract_intelligence)
-        Deduplicates across all messages
-    
-    Example:
-        >>> history = [
-        ...     {"sender": "scammer", "text": "Send to fraud@paytm"},
-        ...     {"sender": "scammer", "text": "Or call 9876543210"}
-        ... ]
-        >>> extract_from_conversation(history)
-        {
-            "upiIds": ["fraud@paytm"],
-            "phoneNumbers": ["9876543210"],
-            ...
-        }
     """
     if not conversation_history:
         return _empty_intelligence()
     
-    # Aggregate all intelligence
     aggregated = _empty_intelligence()
     
     for message in conversation_history:
-        # Only extract from scammer messages
         sender = message.get("sender", "")
         text = message.get("text", "")
         
         if sender == "scammer" and text:
             intel = extract_intelligence(text)
-            
-            # Merge into aggregated
-            for key in aggregated:
-                aggregated[key].extend(intel[key])
-    
-    # Deduplicate all lists
-    for key in aggregated:
-        aggregated[key] = list(set(aggregated[key]))
+            aggregated = merge_intelligence(aggregated, intel)
     
     return aggregated
 
@@ -109,13 +110,6 @@ def extract_from_conversation(conversation_history: list) -> Dict[str, List[str]
 def merge_intelligence(intel1: Dict[str, List[str]], intel2: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """
     Merges two intelligence dictionaries
-    
-    Args:
-        intel1: First intelligence dict
-        intel2: Second intelligence dict
-    
-    Returns:
-        Merged and deduplicated intelligence dict
     """
     if not intel1:
         return intel2 or _empty_intelligence()
@@ -134,23 +128,11 @@ def merge_intelligence(intel1: Dict[str, List[str]], intel2: Dict[str, List[str]
 def count_intelligence_items(intelligence: Dict[str, List[str]]) -> int:
     """
     Counts total number of extracted intelligence items
-    
-    Args:
-        intelligence: Intelligence dict
-    
-    Returns:
-        Total count of all items
-    
-    Example:
-        >>> intel = {"upiIds": ["a@b"], "phoneNumbers": ["123", "456"], ...}
-        >>> count_intelligence_items(intel)
-        3
     """
     if not intelligence:
         return 0
     
-    # Only count high-value items (not keywords)
-    high_value_keys = ["upiIds", "bankAccounts", "phoneNumbers", "ifscCodes", "phishingLinks"]
+    high_value_keys = ["upiIds", "bankAccounts", "phoneNumbers", "ifscCodes", "phishingLinks", "emails"]
     
     total = 0
     for key in high_value_keys:
@@ -162,13 +144,6 @@ def count_intelligence_items(intelligence: Dict[str, List[str]]) -> int:
 def has_sufficient_intelligence(intelligence: Dict[str, List[str]], threshold: int = 2) -> bool:
     """
     Checks if enough intelligence has been gathered
-    
-    Args:
-        intelligence: Intelligence dict
-        threshold: Minimum items required (default: 2)
-    
-    Returns:
-        True if sufficient intelligence gathered
     """
     return count_intelligence_items(intelligence) >= threshold
 
@@ -176,17 +151,6 @@ def has_sufficient_intelligence(intelligence: Dict[str, List[str]], threshold: i
 def format_intelligence_summary(intelligence: Dict[str, List[str]]) -> str:
     """
     Creates human-readable summary of extracted intelligence
-    
-    Args:
-        intelligence: Intelligence dict
-    
-    Returns:
-        Formatted string summary
-    
-    Example:
-        >>> intel = {"upiIds": ["fraud@paytm"], "phoneNumbers": ["9876543210"], ...}
-        >>> format_intelligence_summary(intel)
-        "UPI IDs: fraud@paytm | Phone Numbers: 9876543210"
     """
     if not intelligence:
         return "No intelligence extracted"
@@ -208,10 +172,17 @@ def format_intelligence_summary(intelligence: Dict[str, List[str]]) -> str:
     if intelligence.get("phishingLinks"):
         parts.append(f"Links: {', '.join(intelligence['phishingLinks'])}")
     
-    if not parts:
-        return "No actionable intelligence extracted"
+    if intelligence.get("emails"):
+        parts.append(f"Emails: {', '.join(intelligence['emails'])}")
     
-    return " | ".join(parts)
+    return " | ".join(parts) if parts else "No actionable intelligence extracted"
+
+
+def get_emails_for_notes(intelligence: Dict[str, List[str]]) -> List[str]:
+    """
+    Returns emails for inclusion in agent notes
+    """
+    return intelligence.get("emails", [])
 
 
 def _empty_intelligence() -> Dict[str, List[str]]:
@@ -224,5 +195,6 @@ def _empty_intelligence() -> Dict[str, List[str]]:
         "phoneNumbers": [],
         "ifscCodes": [],
         "phishingLinks": [],
-        "suspiciousKeywords": []
+        "suspiciousKeywords": [],
+        "emails": []
     }
