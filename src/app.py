@@ -117,7 +117,7 @@ def process_honeypot_request():
     # Step 4: Detect scam
     is_scam, confidence, indicators = detect_scam(scammer_text, conversation_history)
     
-    # Step 5: Extract intelligence
+    # Step 5: Extract intelligence (including emails)
     current_intel = extract_intelligence(scammer_text)
     
     # Step 6: Update session with scammer message
@@ -147,12 +147,20 @@ def process_honeypot_request():
     
     # Step 9: Check if should send callback
     if should_send_callback(session):
+        # Get emails from extracted intelligence
+        emails_found = session.extracted_intelligence.get("emails", [])
+        
+        # Generate agent notes WITH emails
         agent_notes = generate_agent_notes(
             conversation_history=session.conversation_history,
             scam_indicators=session.indicators,
-            extracted_intelligence=session.extracted_intelligence
+            extracted_intelligence=session.extracted_intelligence,
+            emails_found=emails_found
         )
+        
+        # Send callback to GUVI
         callback_success = send_final_callback(session, agent_notes)
+        
         if callback_success:
             print(f"[HONEYPOT] Callback sent for session {session_id}")
     
