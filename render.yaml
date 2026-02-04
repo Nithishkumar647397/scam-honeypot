@@ -9,3 +9,5 @@ services:
         sync: false
       - key: API_SECRET_KEY
         sync: false
+      - key: GUVI_CALLBACK_URL
+        sync: false
