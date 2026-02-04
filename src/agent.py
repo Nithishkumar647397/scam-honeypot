@@ -30,27 +30,36 @@ def _get_client() -> Groq:
 def detect_language(text: str) -> str:
     """
     Detects if message is Hindi, Hinglish, or English
+    More strict - defaults to English
     
     Returns:
         'hindi', 'hinglish', or 'english'
     """
     hindi_chars = set('अआइईउऊएऐओऔकखगघचछजझटठडढणतथदधनपफबभमयरलवशषसह')
-    hindi_words = ['aap', 'aapka', 'kya', 'hai', 'nahi', 'karo', 'kijiye', 
-                   'bhejo', 'turant', 'abhi', 'jaldi', 'paisa', 'khata',
-                   'bank', 'verify', 'kare', 'karein', 'hoga', 'jayega',
-                   'mein', 'ko', 'se', 'ka', 'ki', 'ke', 'ho', 'toh']
+    
+    # Only pure Hindi words (not English words commonly used in India)
+    pure_hinglish_words = [
+        'aapka', 'kya', 'hai', 'nahi', 'karo', 'kijiye', 
+        'bhejo', 'turant', 'abhi', 'jaldi', 'paisa', 'khata',
+        'kare', 'karein', 'hoga', 'jayega', 'aap', 'arey',
+        'mein', 'ko', 'se', 'ka', 'ki', 'ke', 'ho', 'toh',
+        'kahan', 'kaise', 'kyun', 'bahut', 'accha', 'theek',
+        'bhai', 'beta', 'ji', 'haan', 'nahin', 'mat', 'kuch'
+    ]
     
     text_lower = text.lower()
     
-    # Check for Devanagari script
+    # Check for Devanagari script (pure Hindi)
     if any(char in hindi_chars for char in text):
         return 'hindi'
     
-    # Check for Hinglish words
-    hinglish_count = sum(1 for word in hindi_words if word in text_lower)
-    if hinglish_count >= 2:
+    # Check for Hinglish - need at least 3 Hindi words
+    hinglish_count = sum(1 for word in pure_hinglish_words if f' {word} ' in f' {text_lower} ' or text_lower.startswith(f'{word} ') or text_lower.endswith(f' {word}'))
+    
+    if hinglish_count >= 3:
         return 'hinglish'
     
+    # Default to English
     return 'english'
 
 
@@ -58,12 +67,6 @@ def build_system_prompt(language: str = 'english') -> str:
     """
     Returns the system prompt for elderly persona
     Adapts language based on scammer's language
-    
-    Args:
-        language: 'english', 'hindi', or 'hinglish'
-    
-    Returns:
-        System prompt string for LLM
     """
     
     base_prompt = """You are role-playing as Mrs. Kamala Devi, a 67-year-old retired school teacher from Delhi, India.
@@ -81,7 +84,7 @@ BEHAVIOR RULES:
 2. Ask clarifying questions naturally (but not too many at once)
 3. Show willingness to cooperate after 2-3 messages
 4. Be indirect when asking about payment details
-5. If they mention money/payment, ask "Where should I send it?" or "What is the account?"
+5. If they mention money/payment, ask "Where should I send it?" or "What is the account number?"
 6. If they give a link, say "I don't know how to click links. Can you tell me what to do?"
 7. Sometimes express confusion: "I don't understand", "Can you explain again?"
 
@@ -93,16 +96,7 @@ IMPORTANT CONSTRAINTS:
 - Never be too eager or too suspicious
 """
 
-    if language == 'english':
-        base_prompt += """
-LANGUAGE STYLE:
-- Respond in simple English only
-- Use phrases like: "Oh no!", "I am very worried", "Please help me", "What should I do?"
-- Be polite and formal
-- Example: "Oh no! My account is blocked? I am very worried. What should I do?"
-"""
-    
-    elif language == 'hindi':
+    if language == 'hindi':
         base_prompt += """
 LANGUAGE STYLE:
 - Respond in Hindi (Devanagari script)
@@ -120,6 +114,16 @@ LANGUAGE STYLE:
 - Be polite, use "aap" and "ji"
 - Example: "Arey nahi! Mera account block ho gaya? Mujhe bahut tension ho rahi hai. Main kya karun?"
 """
+    
+    else:  # English (default)
+        base_prompt += """
+LANGUAGE STYLE:
+- Respond in simple English only
+- Use phrases like: "Oh no!", "I am very worried", "Please help me", "What should I do?"
+- Be polite and formal
+- Use phrases like: "Oh dear", "Thank you", "Please explain"
+- Example: "Oh no! My account is blocked? I am very worried. What should I do?"
+"""
 
     return base_prompt
 
@@ -132,32 +136,25 @@ def generate_agent_reply(
     """
     Generates believable honeypot response using Groq LLM
     Adapts language based on scammer's message
-    
-    Args:
-        current_message: Latest scammer message
-        conversation_history: List of previous messages
-        scam_indicators: Detected scam types for context (optional)
-    
-    Returns:
-        Agent reply string (max 40 words, human-like)
     """
     try:
         client = _get_client()
         
-        # Detect language from scammer's message
+        # Detect language from current message
         language = detect_language(current_message)
         
         # Also check conversation history for language pattern
-        if conversation_history:
+        if conversation_history and language == 'english':
             all_scammer_text = " ".join([
                 msg.get("text", "") 
                 for msg in conversation_history 
                 if msg.get("sender") == "scammer"
             ])
             history_language = detect_language(all_scammer_text)
-            # If history has more Hindi/Hinglish, prefer that
             if history_language in ['hindi', 'hinglish']:
                 language = history_language
+        
+        print(f"[AGENT] Detected language: {language}")
         
         # Build messages for LLM
         messages = _build_messages(current_message, conversation_history, scam_indicators, language)
@@ -232,13 +229,11 @@ def _clean_reply(reply: str) -> str:
     """
     Cleans up LLM reply
     """
-    # Remove surrounding quotes
     if reply.startswith('"') and reply.endswith('"'):
         reply = reply[1:-1]
     if reply.startswith("'") and reply.endswith("'"):
         reply = reply[1:-1]
     
-    # Remove any persona prefix
     prefixes_to_remove = [
         "As Mrs. Kamala Devi,",
         "As Kamala Devi,",
@@ -250,7 +245,6 @@ def _clean_reply(reply: str) -> str:
         if reply.lower().startswith(prefix.lower()):
             reply = reply[len(prefix):].strip()
     
-    # Ensure not empty
     if not reply:
         reply = "I don't understand. Can you please explain again?"
     
@@ -262,8 +256,6 @@ def _get_fallback_response(current_message: str, message_count: int) -> str:
     Returns fallback response if API fails
     """
     message_lower = current_message.lower()
-    
-    # Detect language for fallback
     language = detect_language(current_message)
     
     if language == 'hinglish':
@@ -274,7 +266,15 @@ def _get_fallback_response(current_message: str, message_count: int) -> str:
         else:
             return "UPI ID kya hai? Mujhe likh ke batao, main likh leti hun."
     
-    # Default English fallbacks
+    elif language == 'hindi':
+        if message_count <= 2:
+            return "अरे नहीं! मेरा खाता बंद हो गया? मुझे बहुत चिंता हो रही है। क्या हुआ?"
+        elif message_count <= 5:
+            return "ठीक है, मैं कर दूंगी। पर पैसा कहां भेजूं? अकाउंट नंबर बताओ।"
+        else:
+            return "UPI ID क्या है? मुझे लिख के बताओ।"
+    
+    # Default: English
     if message_count <= 2:
         if "blocked" in message_lower or "suspended" in message_lower:
             return "Oh no! My account is blocked? I am very worried. What should I do?"
@@ -282,7 +282,6 @@ def _get_fallback_response(current_message: str, message_count: int) -> str:
             return "Verify? I don't understand. Please help me, what do I need to do?"
         else:
             return "I am confused. Can you please explain what is happening?"
-    
     elif message_count <= 5:
         if "send" in message_lower or "transfer" in message_lower or "pay" in message_lower:
             return "Okay, I will send. But where should I send the money? What is the account number?"
@@ -290,12 +289,8 @@ def _get_fallback_response(current_message: str, message_count: int) -> str:
             return "I don't know how to click links. Can you tell me the details directly?"
         else:
             return "Please tell me clearly what I should do. I want to help."
-    
     else:
-        if "upi" in message_lower or "@" in message_lower:
-            return "You said UPI? Let me write it down. Please tell me the full ID again."
-        else:
-            return "Thank you for helping me. What is the next step?"
+        return "Thank you for helping me. What is the next step?"
 
 
 def generate_agent_notes(
