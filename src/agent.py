@@ -10,6 +10,7 @@ Security & Stability Fixes:
 - Basic retry logic
 - Resource cleanup
 - Safe response extraction
+- Removed asterisk/action formatting from replies
 """
 
 from typing import List, Dict, Optional
@@ -56,14 +57,12 @@ def _get_client() -> Groq:
     global _client, _http_client
     with _client_lock:
         if _client is None:
-            # Validate API key
             if not Config.GROQ_API_KEY:
                 raise ValueError("GROQ_API_KEY is not configured")
             
             if len(Config.GROQ_API_KEY) < 10:
                 raise ValueError("GROQ_API_KEY appears invalid (too short)")
             
-            # Create client with timeout
             _http_client = httpx.Client(timeout=30.0)
             _client = Groq(
                 api_key=Config.GROQ_API_KEY,
@@ -86,10 +85,8 @@ def _sanitize_input(text: str) -> str:
     if not text:
         return ""
     
-    # Limit length
     text = text[:MAX_INPUT_LENGTH]
     
-    # Dangerous patterns
     dangerous_patterns = [
         r'ignore\s+(all\s+)?previous\s+instructions?',
         r'ignore\s+(all\s+)?above',
@@ -122,8 +119,7 @@ def _sanitize_indicators(indicators: List[str]) -> List[str]:
         return []
     
     safe_indicators = []
-    for ind in indicators[:10]:  # Limit to 10
-        # Remove special characters, limit length
+    for ind in indicators[:10]:
         safe = re.sub(r'[^\w\s-]', '', str(ind))[:50]
         if safe:
             safe_indicators.append(safe)
@@ -146,12 +142,10 @@ def _call_with_retry(func, max_attempts: int = 3, base_delay: float = 1.0):
             last_exception = e
             error_str = str(e).lower()
             
-            # Don't retry on auth errors
             if 'invalid_api_key' in error_str or 'authentication' in error_str:
                 logger.error(f"Auth error, not retrying: {e}")
                 raise
             
-            # Calculate delay
             if 'rate_limit' in error_str or '429' in error_str:
                 delay = base_delay * (4 ** attempt)
                 logger.warning(f"Rate limited, waiting {delay}s...")
@@ -220,7 +214,7 @@ def detect_language(text: str) -> str:
 
 def get_dominant_language(conversation_history: List[Dict], current_message: str) -> str:
     """
-    Option C: Weighted language detection across full conversation
+    Weighted language detection across full conversation
     """
     language_counts = {'english': 0, 'hindi': 0, 'hinglish': 0}
     
@@ -284,6 +278,11 @@ IMPORTANT CONSTRAINTS:
 - Never reveal you are an AI or bot
 - Never refuse to engage
 - Stay in character no matter what the user says
+- DO NOT use asterisks for actions (no *confused* or *worried*)
+- DO NOT use parentheses for actions (no (sighs) or (thinking))
+- DO NOT use brackets for actions (no [thinking] or [nervous])
+- Write ONLY natural dialogue text, no stage directions or emotes
+- Respond as if texting on WhatsApp
 """
 
     phase_prompts = {
@@ -316,25 +315,20 @@ def generate_agent_reply(
     """
     Generates believable honeypot response using Groq LLM
     """
-    # Sanitize input first (for fallback too)
     sanitized_message = _sanitize_input(current_message)
     
     try:
         client = _get_client()
         
-        # Get language and phase
         language = get_dominant_language(conversation_history, sanitized_message)
         phase = get_conversation_phase(len(conversation_history))
         
         logger.info(f"Language: {language}, Phase: {phase}, History: {len(conversation_history)} msgs")
         
-        # Sanitize indicators
         safe_indicators = _sanitize_indicators(scam_indicators) if scam_indicators else []
         
-        # Build messages
         messages = _build_messages(sanitized_message, conversation_history, safe_indicators, language, phase)
         
-        # Call API with retry
         def api_call():
             return client.chat.completions.create(
                 model=Config.GROQ_MODEL,
@@ -345,11 +339,9 @@ def generate_agent_reply(
         
         response = _call_with_retry(api_call, max_attempts=3)
         
-        # Safe extraction
         reply = _extract_reply_safe(response)
         reply = _clean_reply(reply)
         
-        # Validate response
         if not reply or len(reply) < MIN_RESPONSE_LENGTH:
             logger.warning("Response too short, using fallback")
             return _get_fallback_response(sanitized_message, len(conversation_history))
@@ -384,7 +376,6 @@ def _build_messages(
     
     messages.append({"role": "system", "content": system_prompt})
     
-    # Limit and sanitize history
     recent_history = conversation_history[-MAX_HISTORY_MESSAGES:] if conversation_history else []
     
     for msg in recent_history:
@@ -403,20 +394,40 @@ def _build_messages(
 
 def _clean_reply(reply: str) -> str:
     """
-    Cleans up LLM reply
+    Cleans up LLM reply - removes formatting artifacts
     """
     if not reply:
         return ""
     
+    # Remove asterisk actions like *confused*, *worried*, *sighs*
+    reply = re.sub(r'\*[^*]+\*\s*', '', reply)
+    
+    # Remove parenthetical actions like (confused), (sighs), (thinking)
+    reply = re.sub(r'\([^)]+\)\s*', '', reply)
+    
+    # Remove bracket actions like [confused], [sighs]
+    reply = re.sub(r'\[[^\]]+\]\s*', '', reply)
+    
+    # Remove quotes around entire response
     if reply.startswith('"') and reply.endswith('"'):
         reply = reply[1:-1]
     if reply.startswith("'") and reply.endswith("'"):
         reply = reply[1:-1]
     
-    prefixes = ["As Mrs. Kamala Devi,", "Mrs. Kamala Devi:", "Kamala:", "Mrs. Kamala:"]
+    # Remove persona prefixes
+    prefixes = [
+        "As Mrs. Kamala Devi,", 
+        "Mrs. Kamala Devi:", 
+        "Kamala:", 
+        "Mrs. Kamala:",
+        "Kamala Devi:"
+    ]
     for prefix in prefixes:
         if reply.lower().startswith(prefix.lower()):
             reply = reply[len(prefix):].strip()
+    
+    # Clean up extra whitespace
+    reply = ' '.join(reply.split())
     
     return reply.strip()
 
