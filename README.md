@@ -45,6 +45,3 @@ The **Agentic Honey-Pot** is an autonomous AI system that detects scam intent an
 *   **Deployment:** Render Cloud
 
 ---
-
-## 🚀 Live De
-**API Endpoint:**
