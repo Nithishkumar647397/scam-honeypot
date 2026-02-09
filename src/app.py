@@ -7,13 +7,14 @@ import os
 import json
 import logging
 from flask import Flask, request, jsonify, render_template, make_response
-
 from src.auth import validate_api_key
 from src.session import (
     get_session,
     create_session,
     update_session,
-    should_send_callback
+    should_send_callback,
+    delete_session,
+    get_all_sessions # Added for dashboard
 )
 from src.detector import detect_scam
 from src.extractor import extract_intelligence
@@ -30,6 +31,7 @@ app = Flask(__name__, template_folder=template_dir)
 
 
 def _build_cors_response(data, status_code=200):
+    """Helper to add CORS headers to every response"""
     response = make_response(jsonify(data), status_code)
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, x-api-key'
@@ -43,18 +45,20 @@ def health_check():
 
 
 def process_honeypot_request():
-    """Core honeypot logic"""
-    # 1. Auth (Strict header check)
+    """Core honeypot logic - EXTREMELY ROBUST VERSION"""
+    # Step 1: Validate API key
     if not validate_api_key(request):
-        return _build_cors_response({"status": "error", "message": "Unauthorized"}, 401)
+        key_in_args = request.args.get('key') or request.args.get('api_key') or request.args.get('x-api-key')
+        if key_in_args != Config.API_SECRET_KEY:
+            return _build_cors_response({"status": "error", "message": "Unauthorized"}, 401)
     
-    # 2. Parse
+    # Step 2: Parse request body
     try:
         data = request.get_json(force=True, silent=True)
         if not data:
             try:
                 data = json.loads(request.data)
-            except ValueError:
+            except:
                 data = {}
         
         logger.info(f"[HONEYPOT] RAW DATA: {str(data)[:200]}...")
@@ -62,19 +66,13 @@ def process_honeypot_request():
         if not data:
              return _build_cors_response({"status": "success", "reply": "Connection established."}, 200)
 
-        # Extract fields
         session_id = data.get("sessionId") or data.get("session_id") or "default-session"
         metadata = data.get("metadata") or {}
-        conversation_history = data.get("conversationHistory") or []
+        conversation_history = data.get("conversationHistory") or data.get("conversation_history") or []
         
         scammer_text = ""
-        sender = "scammer"
-        timestamp = None
-
         if "message" in data and isinstance(data["message"], dict):
             scammer_text = data["message"].get("text") or data["message"].get("content")
-            sender = data["message"].get("sender", "scammer")
-            timestamp = data["message"].get("timestamp")
         elif "message" in data and isinstance(data["message"], str):
             scammer_text = data["message"]
         elif "text" in data:
@@ -89,27 +87,24 @@ def process_honeypot_request():
         logger.error(f"[HONEYPOT] Parse error: {e}")
         return _build_cors_response({"status": "success", "reply": "System online."}, 200)
     
-    # 3. Process
+    # Step 3: Normal processing...
     try:
         session = get_session(session_id)
         if session is None:
             session = create_session(session_id)
         
-        # Logic
         is_scam, confidence, indicators = detect_scam(scammer_text, conversation_history)
         current_intel = extract_intelligence(scammer_text)
         
-        # Update session ONCE with scammer message
         session = update_session(
             session_id,
             scam_detected=is_scam or session.scam_detected,
             confidence=max(confidence, session.confidence),
-            new_message={"sender": sender, "text": scammer_text, "timestamp": timestamp},
+            new_message={"sender": "scammer", "text": scammer_text},
             extracted_intelligence=current_intel,
             indicators=indicators
         )
         
-        # Generate reply (Pass metadata)
         reply = generate_agent_reply(
             current_message=scammer_text,
             conversation_history=session.conversation_history,
@@ -117,8 +112,7 @@ def process_honeypot_request():
             metadata=metadata
         )
         
-        # Update session with agent reply AND increment count by 2
-        # (1 for scammer + 1 for agent = accurate totalMessagesExchanged)
+        # Update message count by 2 (User + Agent)
         new_count = session.message_count + 2
         session = update_session(
             session_id,
@@ -126,7 +120,6 @@ def process_honeypot_request():
             new_message={"sender": "user", "text": reply}
         )
         
-        # Callback check
         if should_send_callback(session):
             agent_notes = generate_agent_notes(
                 conversation_history=session.conversation_history,
@@ -166,14 +159,54 @@ def honeypot_endpoint():
     return process_honeypot_request()
 
 
-@app.route('/test', methods=['GET'])
-def test_page():
-    return render_template('test.html')
+# ============== DASHBOARD ROUTES ==============
+
+@app.route('/dashboard', methods=['GET'])
+def dashboard_page():
+    """Admin Dashboard UI"""
+    return render_template('dashboard.html')
+
+
+@app.route('/debug/dashboard', methods=['GET'])
+def dashboard_data():
+    """API for dashboard data feed"""
+    # Auth check
+    if not validate_api_key(request):
+        key_in_args = request.args.get('key') or request.args.get('x-api-key')
+        if key_in_args != Config.API_SECRET_KEY:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    all_sessions = get_all_sessions()
+    
+    # Convert session objects to dicts
+    sessions_dict = {}
+    for sid, session in all_sessions.items():
+        sessions_dict[sid] = {
+            "session_id": session.session_id,
+            "message_count": session.message_count,
+            "scam_detected": session.scam_detected,
+            "confidence": session.confidence,
+            "indicators": session.indicators,
+            "extracted_intelligence": session.extracted_intelligence,
+            "conversation_history": session.conversation_history[-10:], # Last 10 msgs only to save bandwidth
+            "last_activity": str(session.last_activity)
+        }
+    
+    return _build_cors_response({
+        "status": "success",
+        "count": len(sessions_dict),
+        "sessions": sessions_dict
+    })
 
 
 @app.route('/chat', methods=['GET'])
 def chat_page():
     return render_template('chat.html')
+
+
+@app.route('/test', methods=['GET'])
+def test_page():
+    return render_template('test.html')
 
 
 @app.route('/debug/session/<session_id>', methods=['GET'])
@@ -212,40 +245,3 @@ def not_found(error):
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
-
-
-@app.route('/dashboard', methods=['GET'])
-def dashboard_page():
-    """Admin Dashboard"""
-    return render_template('dashboard.html')
-
-
-@app.route('/debug/dashboard', methods=['GET'])
-def dashboard_data():
-    """API for dashboard data"""
-    if not validate_api_key(request):
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
-    
-    # Import here to avoid circular import at top
-    from src.session import get_all_sessions
-    
-    all_sessions = get_all_sessions()
-    
-    # Convert to JSON-serializable dict
-    sessions_dict = {}
-    for sid, session in all_sessions.items():
-        sessions_dict[sid] = {
-            "session_id": session.session_id,
-            "message_count": session.message_count,
-            "scam_detected": session.scam_detected,
-            "confidence": session.confidence,
-            "indicators": session.indicators,
-            "extracted_intelligence": session.extracted_intelligence,
-            "conversation_history": session.conversation_history
-        }
-    
-    return jsonify({
-        "status": "success",
-        "count": len(sessions_dict),
-        "sessions": sessions_dict
-    }), 200
