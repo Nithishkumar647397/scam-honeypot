@@ -1,35 +1,45 @@
 """
 GUVI callback module
 Owner: Member B
+
+Fixes:
+- Added logging instead of print
+- Added emails to notes summary
+- Added retry logic for network stability
+- Fixed async function to use actual threading
 """
 
+import logging
 import requests
-from typing import Dict
+import time
+import threading
+from typing import Dict, Optional
 from src.config import Config
 from src.session import SessionData
+
+
+logger = logging.getLogger(__name__)
+
+# Default GUVI callback endpoint
+GUVI_CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 
 
 def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
     """
     Builds the callback payload from session data
-    
-    Args:
-        session: Session data
-        agent_notes: Notes about scammer
-    
-    Returns:
-        Dict ready for JSON serialization
     """
+    intel = session.extracted_intelligence or {}
+    
     return {
         "sessionId": session.session_id,
         "scamDetected": session.scam_detected,
         "totalMessagesExchanged": session.message_count,
         "extractedIntelligence": {
-            "bankAccounts": session.extracted_intelligence.get("bankAccounts", []),
-            "upiIds": session.extracted_intelligence.get("upiIds", []),
-            "phishingLinks": session.extracted_intelligence.get("phishingLinks", []),
-            "phoneNumbers": session.extracted_intelligence.get("phoneNumbers", []),
-            "suspiciousKeywords": session.extracted_intelligence.get("suspiciousKeywords", [])
+            "bankAccounts": intel.get("bankAccounts", []),
+            "upiIds": intel.get("upiIds", []),
+            "phishingLinks": intel.get("phishingLinks", []),
+            "phoneNumbers": intel.get("phoneNumbers", []),
+            "suspiciousKeywords": intel.get("suspiciousKeywords", [])
         },
         "agentNotes": agent_notes if agent_notes else generate_default_notes(session)
     }
@@ -38,21 +48,14 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
 def generate_default_notes(session: SessionData) -> str:
     """
     Generates default agent notes from session data
-    
-    Args:
-        session: Session data
-    
-    Returns:
-        Generated notes string
     """
     notes_parts = []
     
-    # Add indicators
     if session.indicators:
         notes_parts.append(f"Scam indicators: {', '.join(session.indicators)}")
     
-    # Add extraction counts
-    intel = session.extracted_intelligence
+    intel = session.extracted_intelligence or {}
+    
     if intel.get("upiIds"):
         notes_parts.append(f"Extracted {len(intel['upiIds'])} UPI ID(s)")
     if intel.get("phoneNumbers"):
@@ -61,66 +64,68 @@ def generate_default_notes(session: SessionData) -> str:
         notes_parts.append(f"Extracted {len(intel['bankAccounts'])} bank account(s)")
     if intel.get("phishingLinks"):
         notes_parts.append(f"Extracted {len(intel['phishingLinks'])} phishing link(s)")
+    if intel.get("emails"):
+        notes_parts.append(f"Extracted {len(intel['emails'])} email(s)")
     
-    # Add confidence
     if session.confidence > 0:
         notes_parts.append(f"Confidence: {session.confidence:.0%}")
     
-    if notes_parts:
-        return ". ".join(notes_parts) + "."
-    else:
-        return "Scam engagement completed."
+    return ". ".join(notes_parts) + "." if notes_parts else "Scam engagement completed."
 
 
-def send_final_callback(session: SessionData, agent_notes: str = "") -> bool:
+def send_final_callback(session: SessionData, agent_notes: str = "", max_retries: int = 2) -> bool:
     """
     Sends final intelligence to GUVI evaluation endpoint
-    
-    Args:
-        session: Completed session data
-        agent_notes: Summary of scammer behavior
-    
-    Returns:
-        True if callback successful, False otherwise
     """
-    try:
-        # Build payload
-        payload = build_callback_payload(session, agent_notes)
-        
-        # Send to GUVI endpoint
-        response = requests.post(
-            Config.GUVI_CALLBACK_URL,
-            json=payload,
-            timeout=10,
-            headers={"Content-Type": "application/json"}
-        )
-        
-        # Check response
-        if response.status_code == 200:
-            print(f"[CALLBACK] Success for session {session.session_id}")
-            return True
-        else:
-            print(f"[CALLBACK] Failed with status {response.status_code}: {response.text}")
-            return False
+    payload = build_callback_payload(session, agent_notes)
     
-    except requests.exceptions.Timeout:
-        print(f"[CALLBACK] Timeout for session {session.session_id}")
-        return False
+    # Use config URL or fallback to hardcoded
+    callback_url = getattr(Config, 'GUVI_CALLBACK_URL', GUVI_CALLBACK_URL)
+    if not callback_url:
+        callback_url = GUVI_CALLBACK_URL
     
-    except requests.exceptions.RequestException as e:
-        print(f"[CALLBACK] Error for session {session.session_id}: {e}")
-        return False
+    logger.info(f"Sending callback for session: {session.session_id}")
+    logger.debug(f"Payload: {payload}")
+    
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(
+                callback_url,
+                json=payload,
+                timeout=10,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Callback success for session: {session.session_id}")
+                return True
+            else:
+                logger.warning(f"Callback failed ({response.status_code}): {response.text[:100]}")
+                
+        except requests.exceptions.Timeout:
+            logger.warning(f"Callback timeout (attempt {attempt + 1}/{max_retries + 1})")
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Callback error: {e}")
+        
+        # Don't retry on last attempt
+        if attempt < max_retries:
+            time.sleep(1)  # Wait 1 second before retry
+    
+    logger.error(f"Callback failed after {max_retries + 1} attempts for session: {session.session_id}")
+    return False
 
 
 def send_callback_async(session: SessionData, agent_notes: str = "") -> None:
     """
     Sends callback without blocking (fire and forget)
-    
-    Args:
-        session: Completed session data
-        agent_notes: Summary of scammer behavior
     """
-    try:
-        send_final_callback(session, agent_notes)
-    except Exception as e:
-        print(f"[CALLBACK] Async error: {e}")
+    def _send():
+        try:
+            send_final_callback(session, agent_notes)
+        except Exception as e:
+            logger.error(f"Async callback error: {e}")
+    
+    # Actually run in a separate thread
+    thread = threading.Thread(target=_send, daemon=True)
+    thread.start()
