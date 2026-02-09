@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SessionData:
-    """Data stored for each conversation session"""
     session_id: str
     created_at: datetime
     message_count: int = 0
@@ -39,7 +38,6 @@ class SessionData:
 
 _sessions: Dict[str, SessionData] = {}
 _sessions_lock = threading.Lock()
-
 SESSION_EXPIRY_HOURS = 1
 
 
@@ -47,8 +45,7 @@ def get_session(session_id: str) -> Optional[SessionData]:
     with _sessions_lock:
         session = _sessions.get(session_id)
         if session:
-            expiry_time = session.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS)
-            if datetime.now() > expiry_time:
+            if datetime.now() > session.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS):
                 del _sessions[session_id]
                 return None
             session.last_activity = datetime.now()
@@ -91,23 +88,17 @@ def update_session(
         
         if message_count is not None:
             session.message_count = message_count
-        
         if scam_detected is not None:
             session.scam_detected = scam_detected
-        
         if confidence is not None:
             session.confidence = confidence
-        
         if new_message is not None:
             session.conversation_history.append(new_message)
-        
         if extracted_intelligence is not None:
             _merge_intelligence(session, extracted_intelligence)
-        
         if indicators is not None:
             existing = set(session.indicators)
-            new_items = set(indicators)
-            session.indicators = list(existing.union(new_items))
+            session.indicators = list(existing.union(set(indicators)))
         
         return session
 
@@ -116,34 +107,24 @@ def _merge_intelligence(session: SessionData, new_intel: Dict):
     for key in session.extracted_intelligence:
         if key in new_intel and new_intel[key]:
             existing = set(session.extracted_intelligence[key])
-            new_items = set(new_intel[key])
-            session.extracted_intelligence[key] = list(existing.union(new_items))
+            session.extracted_intelligence[key] = list(existing.union(set(new_intel[key])))
 
 
 def should_send_callback(session: SessionData) -> bool:
     """
-    Determines if callback should be sent to GUVI
-    
-    UPDATED LOGIC: Wait for more messages to extract better intel
+    ONE callback only. Triggers:
+    1. Max messages (10)
+    2. Intel (2+) + engagement (6+ msgs)
+    3. High confidence (0.8+) + engagement (8+ msgs)
+    4. FAST FAIL: Very high confidence (0.9+) + any intel + 3+ msgs
     """
     if session is None:
         return False
-    
     if session.callback_sent:
         return False
-    
     if not session.scam_detected:
         return False
     
-    # 1. Max messages reached (Safety trigger)
-    max_messages = getattr(Config, 'MAX_MESSAGES', 10)
-    if session.message_count >= max_messages:
-        logger.info(f"Callback trigger: Max messages ({session.message_count})")
-        session.callback_sent = True
-        return True
-    
-    # 2. Intelligence threshold + minimum engagement
-    # Wait for at least 6 messages before sending based on intelligence
     intel = session.extracted_intelligence
     total_items = (
         len(intel.get("upiIds", [])) +
@@ -154,17 +135,30 @@ def should_send_callback(session: SessionData) -> bool:
         len(intel.get("emails", []))
     )
     
+    max_messages = getattr(Config, 'MAX_MESSAGES', 10)
     min_intel = getattr(Config, 'MIN_INTELLIGENCE_FOR_CALLBACK', 2)
     
-    if total_items >= min_intel and session.message_count >= 6:
-        logger.info(f"Callback trigger: Intel ({total_items}) + Msgs ({session.message_count})")
+    # Trigger 1: Max messages
+    if session.message_count >= max_messages:
+        logger.info(f"Callback: max msgs ({session.message_count})")
         session.callback_sent = True
         return True
     
-    # 3. High confidence + significant engagement
-    # Wait for at least 8 messages if relying purely on confidence
+    # Trigger 2: Good intel + decent engagement
+    if total_items >= min_intel and session.message_count >= 6:
+        logger.info(f"Callback: intel ({total_items}) + msgs ({session.message_count})")
+        session.callback_sent = True
+        return True
+    
+    # Trigger 3: High confidence + good engagement
     if session.confidence >= 0.8 and session.message_count >= 8:
-        logger.info(f"Callback trigger: Confidence ({session.confidence}) + Msgs ({session.message_count})")
+        logger.info(f"Callback: confidence ({session.confidence}) + msgs ({session.message_count})")
+        session.callback_sent = True
+        return True
+    
+    # Trigger 4: FAST FAIL - obvious scam with intel, short conversation
+    if session.confidence >= 0.9 and total_items >= 1 and session.message_count >= 3:
+        logger.info(f"Callback: fast-fail ({session.confidence}, {total_items} intel, {session.message_count} msgs)")
         session.callback_sent = True
         return True
     
@@ -173,12 +167,10 @@ def should_send_callback(session: SessionData) -> bool:
 
 def _cleanup_expired_sessions():
     now = datetime.now()
-    expired = []
-    for session_id, session in _sessions.items():
-        if now > session.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS):
-            expired.append(session_id)
-    for session_id in expired:
-        del _sessions[session_id]
+    expired = [sid for sid, s in _sessions.items()
+               if now > s.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS)]
+    for sid in expired:
+        del _sessions[sid]
 
 
 def delete_session(session_id: str) -> bool:
