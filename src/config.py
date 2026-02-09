@@ -1,21 +1,16 @@
 """
 Configuration management
 Owner: Member A
-Created: [Current Date]
 """
 
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 
 class Config:
-    """
-    Central configuration for the honeypot application.
-    All settings are loaded from environment variables.
-    """
+    """Central configuration for the honeypot application."""
     
     # API Keys
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
@@ -28,24 +23,20 @@ class Config:
     )
     
     # Conversation Settings
-    MAX_MESSAGES: int = 10  # Send callback after this many messages
-    MIN_INTELLIGENCE_FOR_CALLBACK: int = 2  # Or after extracting this many items
+    MAX_MESSAGES: int = 10
+    MIN_INTELLIGENCE_FOR_CALLBACK: int = 2
     
     # Groq Settings
-    GROQ_MODEL: str = "llama-3.1-8b-instant"  # Fast and free
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
     GROQ_MAX_TOKENS: int = 150
     GROQ_TEMPERATURE: float = 0.7
-
-
-# Validation function
-def validate_config() -> bool:
-    """
-    Validates that required config values are set.
-    Call this at app startup.
     
-    Returns:
-        True if valid, raises error if not
-    """
+    # Debug Mode
+    DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
+
+def validate_config() -> bool:
+    """Validates required config values at startup."""
     errors = []
     
     if not Config.GROQ_API_KEY:
