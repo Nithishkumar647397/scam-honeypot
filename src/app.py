@@ -14,12 +14,12 @@ from src.session import (
     update_session,
     should_send_callback,
     delete_session,
-    get_all_sessions # Added for dashboard
+    get_all_sessions
 )
 from src.detector import detect_scam
-from src.extractor import extract_intelligence
+from src.extractor import extract_intelligence, merge_intelligence, extract_from_conversation
 from src.agent import generate_agent_reply, generate_agent_notes
-from src.callback import send_final_callback
+from src.callback import send_callback_async
 from src.config import Config
 
 # Setup logging
@@ -93,15 +93,21 @@ def process_honeypot_request():
         if session is None:
             session = create_session(session_id)
         
+        # Logic
         is_scam, confidence, indicators = detect_scam(scammer_text, conversation_history)
+        
+        # --- FIX 1: Extract from HISTORY + CURRENT message ---
+        # This ensures we don't lose intel if session was wiped
+        history_intel = extract_from_conversation(conversation_history)
         current_intel = extract_intelligence(scammer_text)
+        combined_intel = merge_intelligence(history_intel, current_intel)
         
         session = update_session(
             session_id,
             scam_detected=is_scam or session.scam_detected,
             confidence=max(confidence, session.confidence),
             new_message={"sender": "scammer", "text": scammer_text},
-            extracted_intelligence=current_intel,
+            extracted_intelligence=combined_intel,
             indicators=indicators
         )
         
@@ -127,7 +133,10 @@ def process_honeypot_request():
                 extracted_intelligence=session.extracted_intelligence,
                 emails_found=session.extracted_intelligence.get("emails", [])
             )
-            send_final_callback(session, agent_notes)
+            
+            # --- FIX 2: Async Callback ---
+            logger.info(f"Triggering ASYNC callback for session: {session_id}")
+            send_callback_async(session, agent_notes)
         
         return _build_cors_response({
             "status": "success",
@@ -163,22 +172,17 @@ def honeypot_endpoint():
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard_page():
-    """Admin Dashboard UI"""
     return render_template('dashboard.html')
 
 
 @app.route('/debug/dashboard', methods=['GET'])
 def dashboard_data():
-    """API for dashboard data feed"""
-    # Auth check
     if not validate_api_key(request):
         key_in_args = request.args.get('key') or request.args.get('x-api-key')
         if key_in_args != Config.API_SECRET_KEY:
             return jsonify({"status": "error", "message": "Unauthorized"}), 401
     
     all_sessions = get_all_sessions()
-    
-    # Convert session objects to dicts
     sessions_dict = {}
     for sid, session in all_sessions.items():
         sessions_dict[sid] = {
@@ -188,7 +192,7 @@ def dashboard_data():
             "confidence": session.confidence,
             "indicators": session.indicators,
             "extracted_intelligence": session.extracted_intelligence,
-            "conversation_history": session.conversation_history[-10:], # Last 10 msgs only to save bandwidth
+            "conversation_history": session.conversation_history[-10:], 
             "last_activity": str(session.last_activity)
         }
     
