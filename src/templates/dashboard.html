@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Honeypot Command Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        .card { background-color: #1e293b; border: 1px solid #334155; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; }
+        .dot-green { background-color: #22c55e; box-shadow: 0 0 10px #22c55e; }
+        .dot-red { background-color: #ef4444; box-shadow: 0 0 10px #ef4444; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden font-sans">
+
+    <!-- Header -->
+    <header class="bg-slate-900 border-b border-slate-800 p-4 flex justify-between items-center shadow-lg z-10">
+        <div class="flex items-center gap-3">
+            <div class="text-3xl">🍯</div>
+            <div>
+                <h1 class="text-xl font-bold text-cyan-400 tracking-wider">AGENTIC HONEYPOT</h1>
+                <p class="text-xs text-slate-400">Live Threat Intelligence Monitor</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="text-right">
+                <div class="text-xs text-slate-400">System Status</div>
+                <div class="flex items-center justify-end gap-2 text-sm font-semibold text-green-400">
+                    <span class="status-dot dot-green animate-pulse"></span> ONLINE
+                </div>
+            </div>
+            <input type="password" id="apiKey" placeholder="Enter API Key" class="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-sm focus:outline-none focus:border-cyan-500 transition-colors w-48">
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar: Session List -->
+        <aside class="w-80 bg-slate-900 border-r border-slate-800 flex flex-col">
+            <div class="p-4 border-b border-slate-800 bg-slate-800/50">
+                <h2 class="font-bold text-slate-200 flex justify-between">
+                    Active Sessions <span id="sessionCount" class="bg-cyan-900 text-cyan-300 px-2 rounded-full text-xs py-0.5">0</span>
+                </h2>
+            </div>
+            <div id="sessionList" class="flex-1 overflow-y-auto p-2 space-y-2">
+                <!-- Session items will be injected here -->
+                <div class="text-center text-slate-500 mt-10 text-sm italic">Waiting for data...</div>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard -->
+        <main class="flex-1 flex flex-col overflow-hidden bg-slate-950 relative">
+            <!-- Grid Background -->
+            <div class="absolute inset-0 opacity-[0.03]" style="background-image: linear-gradient(#334155 1px, transparent 1px), linear-gradient(90deg, #334155 1px, transparent 1px); background-size: 20px 20px;"></div>
+
+            <!-- Top Stats Row -->
+            <div class="grid grid-cols-4 gap-4 p-6 z-10">
+                <div class="card rounded-xl p-4 shadow-lg border-l-4 border-l-cyan-500">
+                    <div class="text-slate-400 text-xs uppercase font-bold mb-1">Total Threats</div>
+                    <div class="text-2xl font-bold text-white" id="statThreats">0</div>
+                </div>
+                <div class="card rounded-xl p-4 shadow-lg border-l-4 border-l-purple-500">
+                    <div class="text-slate-400 text-xs uppercase font-bold mb-1">Intel Captured</div>
+                    <div class="text-2xl font-bold text-white" id="statIntel">0</div>
+                </div>
+                <div class="card rounded-xl p-4 shadow-lg border-l-4 border-l-green-500">
+                    <div class="text-slate-400 text-xs uppercase font-bold mb-1">Phone Numbers</div>
+                    <div class="text-2xl font-bold text-white" id="statPhones">0</div>
+                </div>
+                <div class="card rounded-xl p-4 shadow-lg border-l-4 border-l-yellow-500">
+                    <div class="text-slate-400 text-xs uppercase font-bold mb-1">Avg. Duration</div>
+                    <div class="text-2xl font-bold text-white" id="statDuration">0 msgs</div>
+                </div>
+            </div>
+
+            <!-- Content Area -->
+            <div class="flex-1 grid grid-cols-3 gap-6 px-6 pb-6 overflow-hidden z-10">
+                
+                <!-- Chat View -->
+                <div class="col-span-2 card rounded-xl flex flex-col overflow-hidden shadow-xl">
+                    <div class="p-3 border-b border-slate-700 bg-slate-800/80 flex justify-between items-center backdrop-blur">
+                        <h3 class="font-bold text-slate-200">Live Interception Log</h3>
+                        <span id="currentSessionId" class="text-xs font-mono text-slate-400">Select a session</span>
+                    </div>
+                    <div id="chatView" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
+                        <div class="flex h-full items-center justify-center text-slate-600 flex-col gap-2">
+                            <div class="text-4xl">📡</div>
+                            <div>Select a session to monitor live interception</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Intel & Charts -->
+                <div class="col-span-1 flex flex-col gap-6 overflow-y-auto pr-1">
+                    <!-- Extracted Intel -->
+                    <div class="card rounded-xl p-4 shadow-lg">
+                        <h3 class="font-bold text-slate-200 mb-3 text-sm uppercase tracking-wide border-b border-slate-700 pb-2">Captured Intelligence</h3>
+                        <div id="intelList" class="space-y-3 text-sm">
+                            <div class="text-slate-500 italic">No data selected</div>
+                        </div>
+                    </div>
+
+                    <!-- Tactic Chart -->
+                    <div class="card rounded-xl p-4 shadow-lg flex-1 min-h-[200px]">
+                        <h3 class="font-bold text-slate-200 mb-2 text-sm uppercase tracking-wide">Scam Tactics</h3>
+                        <canvas id="tacticChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let chartInstance = null;
+
+        // Auto-refresh loop
+        setInterval(fetchData, 3000);
+
+        async function fetchData() {
+            const apiKey = document.getElementById('apiKey').value;
+            if (!apiKey) return;
+
+            try {
+                const response = await fetch('/debug/dashboard', {
+                    headers: { 'x-api-key': apiKey }
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    updateDashboard(data.sessions);
+                }
+            } catch (err) {
+                console.error("Fetch error:", err);
+            }
+        }
+
+        function updateDashboard(sessions) {
+            const sessionList = document.getElementById('sessionList');
+            const sessionIds = Object.keys(sessions);
+            
+            // Update Stats
+            document.getElementById('sessionCount').innerText = sessionIds.length;
+            document.getElementById('statThreats').innerText = sessionIds.filter(id => sessions[id].scam_detected).length;
+            
+            let totalIntel = 0;
+            let totalPhones = 0;
+            let totalMsgs = 0;
+            
+            // Build Session List
+            let listHtml = '';
+            
+            // Sort by most recent activity (rough proxy)
+            sessionIds.reverse().forEach(id => {
+                const s = sessions[id];
+                const intel = s.extracted_intelligence;
+                const intelCount = (intel.upiIds?.length||0) + (intel.bankAccounts?.length||0) + (intel.phoneNumbers?.length||0);
+                
+                totalIntel += intelCount;
+                totalPhones += (intel.phoneNumbers?.length||0);
+                totalMsgs += s.message_count;
+
+                const activeClass = currentSessionId === id ? 'bg-slate-700 border-l-4 border-l-cyan-400' : 'hover:bg-slate-800 border-l-4 border-l-transparent';
+                const scamBadge = s.scam_detected ? '<span class="text-red-400 text-xs">⚠️ Scam</span>' : '<span class="text-slate-500 text-xs">Analyzing...</span>';
+                
+                listHtml += `
+                    <div onclick="selectSession('${id}')" class="cursor-pointer p-3 rounded transition-all ${activeClass}">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-mono text-xs text-slate-300 truncate w-32" title="${id}">${id}</span>
+                            ${scamBadge}
+                        </div>
+                        <div class="flex justify-between text-xs text-slate-500">
+                            <span>${s.message_count} msgs</span>
+                            <span class="${intelCount > 0 ? 'text-green-400 font-bold' : ''}">${intelCount} intel</span>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            sessionList.innerHTML = listHtml;
+            document.getElementById('statIntel').innerText = totalIntel;
+            document.getElementById('statPhones').innerText = totalPhones;
+            document.getElementById('statDuration').innerText = sessionIds.length ? Math.round(totalMsgs / sessionIds.length) : 0;
+
+            // Update Detail View if session selected
+            if (currentSessionId && sessions[currentSessionId]) {
+                updateDetailView(sessions[currentSessionId]);
+            }
+        }
+
+        function selectSession(id) {
+            currentSessionId = id;
+            document.getElementById('currentSessionId').innerText = id;
+            fetchData(); // Immediate update
+        }
+
+        function updateDetailView(session) {
+            // Chat
+            const chatBox = document.getElementById('chatView');
+            let chatHtml = '';
+            session.conversation_history.forEach(msg => {
+                const isScammer = msg.sender === 'scammer';
+                const align = isScammer ? 'justify-start' : 'justify-end';
+                const bg = isScammer ? 'bg-slate-800 text-slate-200 rounded-tl-none' : 'bg-cyan-900 text-cyan-100 rounded-tr-none';
+                const label = isScammer ? '🔴 Scammer' : '🟢 Agent (Mrs. Kamala)';
+                
+                chatHtml += `
+                    <div class="flex ${align}">
+                        <div class="max-w-[80%]">
+                            <div class="text-[10px] text-slate-500 mb-1 ${isScammer ? 'text-left' : 'text-right'}">${label}</div>
+                            <div class="${bg} p-3 rounded-xl shadow text-sm leading-relaxed border border-white/5">
+                                ${msg.text}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            chatBox.innerHTML = chatHtml;
+            
+            // Intel List
+            const intel = session.extracted_intelligence;
+            let intelHtml = '';
+            
+            const addIntel = (label, items, icon) => {
+                if (items && items.length) {
+                    intelHtml += `
+                        <div class="mb-3">
+                            <div class="text-xs text-slate-400 mb-1 flex items-center gap-1">${icon} ${label}</div>
+                            ${items.map(i => `<div class="bg-slate-900 border border-slate-700 p-2 rounded font-mono text-cyan-400 select-all">${i}</div>`).join('')}
+                        </div>
+                    `;
+                }
+            };
+
+            addIntel('Phone Numbers', intel.phoneNumbers, '📱');
+            addIntel('Bank Accounts', intel.bankAccounts, '🏦');
+            addIntel('UPI IDs', intel.upiIds, '💳');
+            addIntel('Links', intel.phishingLinks, '🔗');
+            addIntel('Emails', intel.emails, '📧');
+            
+            if (!intelHtml) intelHtml = '<div class="text-slate-500 text-center py-4">No data extracted yet</div>';
+            document.getElementById('intelList').innerHTML = intelHtml;
+
+            // Update Chart
+            updateChart(session);
+        }
+
+        function updateChart(session) {
+            // Very basic tactic estimation based on keywords in indicators
+            const indicators = session.indicators || [];
+            const data = [
+                indicators.includes('urgency') ? 1 : 0,
+                indicators.includes('threat') ? 1 : 0,
+                indicators.includes('authority_impersonation') ? 1 : 0,
+                indicators.includes('credential_request') ? 1 : 0,
+                indicators.includes('payment_request') ? 1 : 0
+            ];
+
+            const ctx = document.getElementById('tacticChart');
+            
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            chartInstance = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Urgency', 'Fear', 'Authority', 'Credentials', 'Payment'],
+                    datasets: [{
+                        label: 'Threat Profile',
+                        data: data,
+                        backgroundColor: 'rgba(34, 211, 238, 0.2)',
+                        borderColor: '#22d3ee',
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#22d3ee'
+                    }]
+                },
+                options: {
+                    scales: {
+                        r: {
+                            angleLines: { color: '#334155' },
+                            grid: { color: '#334155' },
+                            pointLabels: { color: '#94a3b8', font: { size: 10 } },
+                            ticks: { display: false, max: 1, min: 0 }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>

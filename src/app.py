@@ -212,3 +212,40 @@ def not_found(error):
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
+
+
+@app.route('/dashboard', methods=['GET'])
+def dashboard_page():
+    """Admin Dashboard"""
+    return render_template('dashboard.html')
+
+
+@app.route('/debug/dashboard', methods=['GET'])
+def dashboard_data():
+    """API for dashboard data"""
+    if not validate_api_key(request):
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    # Import here to avoid circular import at top
+    from src.session import get_all_sessions
+    
+    all_sessions = get_all_sessions()
+    
+    # Convert to JSON-serializable dict
+    sessions_dict = {}
+    for sid, session in all_sessions.items():
+        sessions_dict[sid] = {
+            "session_id": session.session_id,
+            "message_count": session.message_count,
+            "scam_detected": session.scam_detected,
+            "confidence": session.confidence,
+            "indicators": session.indicators,
+            "extracted_intelligence": session.extracted_intelligence,
+            "conversation_history": session.conversation_history
+        }
+    
+    return jsonify({
+        "status": "success",
+        "count": len(sessions_dict),
+        "sessions": sessions_dict
+    }), 200
