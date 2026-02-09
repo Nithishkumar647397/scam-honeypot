@@ -1,6 +1,8 @@
 """
 Session management for multi-turn conversations
 Owner: Member B
+
+UPDATED: Multiple callbacks enabled - sends updates when new intel found
 """
 
 import threading
@@ -33,6 +35,8 @@ class SessionData:
     })
     indicators: List[str] = field(default_factory=list)
     callback_sent: bool = False
+    callback_count: int = 0
+    last_callback_intel_count: int = 0
     last_activity: datetime = field(default_factory=datetime.now)
 
 
@@ -110,23 +114,9 @@ def _merge_intelligence(session: SessionData, new_intel: Dict):
             session.extracted_intelligence[key] = list(existing.union(set(new_intel[key])))
 
 
-def should_send_callback(session: SessionData) -> bool:
-    """
-    ONE callback only. Triggers:
-    1. Max messages (10)
-    2. Intel (2+) + engagement (6+ msgs)
-    3. High confidence (0.8+) + engagement (8+ msgs)
-    4. FAST FAIL: Very high confidence (0.9+) + any intel + 3+ msgs
-    """
-    if session is None:
-        return False
-    if session.callback_sent:
-        return False
-    if not session.scam_detected:
-        return False
-    
+def _count_intel(session: SessionData) -> int:
     intel = session.extracted_intelligence
-    total_items = (
+    return (
         len(intel.get("upiIds", [])) +
         len(intel.get("bankAccounts", [])) +
         len(intel.get("phoneNumbers", [])) +
@@ -134,32 +124,62 @@ def should_send_callback(session: SessionData) -> bool:
         len(intel.get("phishingLinks", [])) +
         len(intel.get("emails", []))
     )
+
+
+def should_send_callback(session: SessionData) -> bool:
+    """
+    Smart callback: First callback + updates when new intel found.
+    """
+    if session is None:
+        return False
+    if not session.scam_detected:
+        return False
     
+    current_intel_count = _count_intel(session)
     max_messages = getattr(Config, 'MAX_MESSAGES', 10)
     min_intel = getattr(Config, 'MIN_INTELLIGENCE_FOR_CALLBACK', 2)
     
-    # Trigger 1: Max messages
-    if session.message_count >= max_messages:
-        logger.info(f"Callback: max msgs ({session.message_count})")
-        session.callback_sent = True
-        return True
+    # FIRST callback
+    if not session.callback_sent:
+        # Trigger 1: Max messages
+        if session.message_count >= max_messages:
+            logger.info(f"First callback: max msgs ({session.message_count})")
+            session.callback_sent = True
+            session.last_callback_intel_count = current_intel_count
+            session.callback_count += 1
+            return True
+        
+        # Trigger 2: Intel + engagement
+        if current_intel_count >= min_intel and session.message_count >= 6:
+            logger.info(f"First callback: intel ({current_intel_count}) + msgs ({session.message_count})")
+            session.callback_sent = True
+            session.last_callback_intel_count = current_intel_count
+            session.callback_count += 1
+            return True
+        
+        # Trigger 3: High confidence
+        if session.confidence >= 0.8 and session.message_count >= 8:
+            logger.info(f"First callback: confidence ({session.confidence})")
+            session.callback_sent = True
+            session.last_callback_intel_count = current_intel_count
+            session.callback_count += 1
+            return True
+        
+        # Trigger 4: Fast fail
+        if session.confidence >= 0.9 and current_intel_count >= 1 and session.message_count >= 4:
+            logger.info(f"First callback: fast-fail")
+            session.callback_sent = True
+            session.last_callback_intel_count = current_intel_count
+            session.callback_count += 1
+            return True
+        
+        return False
     
-    # Trigger 2: Good intel + decent engagement
-    if total_items >= min_intel and session.message_count >= 6:
-        logger.info(f"Callback: intel ({total_items}) + msgs ({session.message_count})")
-        session.callback_sent = True
-        return True
-    
-    # Trigger 3: High confidence + good engagement
-    if session.confidence >= 0.8 and session.message_count >= 8:
-        logger.info(f"Callback: confidence ({session.confidence}) + msgs ({session.message_count})")
-        session.callback_sent = True
-        return True
-    
-    # Trigger 4: FAST FAIL - obvious scam with intel, short conversation
-    if session.confidence >= 0.9 and total_items >= 1 and session.message_count >= 3:
-        logger.info(f"Callback: fast-fail ({session.confidence}, {total_items} intel, {session.message_count} msgs)")
-        session.callback_sent = True
+    # UPDATE callback: New intel found after first callback
+    if current_intel_count > session.last_callback_intel_count:
+        logger.info(f"Update callback: new intel ({session.last_callback_intel_count} -> {current_intel_count})")
+        session.last_callback_intel_count = current_intel_count
+        session.callback_count += 1
         return True
     
     return False
@@ -167,7 +187,7 @@ def should_send_callback(session: SessionData) -> bool:
 
 def _cleanup_expired_sessions():
     now = datetime.now()
-    expired = [sid for sid, s in _sessions.items()
+    expired = [sid for sid, s in _sessions.items() 
                if now > s.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS)]
     for sid in expired:
         del _sessions[sid]
