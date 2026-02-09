@@ -1,20 +1,13 @@
 """
 Session management for multi-turn conversations
 Owner: Member B
-
-Fixes:
-- Added callback_sent flag (prevents duplicates)
-- Added emails to intelligence
-- Fixed should_send_callback per GUVI spec
-- Added thread safety
-- Added logging
 """
 
 import threading
 import logging
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.config import Config
 
 
@@ -37,32 +30,40 @@ class SessionData:
         "ifscCodes": [],
         "phishingLinks": [],
         "suspiciousKeywords": [],
-        "emails": []  # Added emails field
+        "emails": []
     })
     indicators: List[str] = field(default_factory=list)
-    callback_sent: bool = False  # Added callback flag
+    callback_sent: bool = False
+    last_activity: datetime = field(default_factory=datetime.now)
 
 
-# Thread-safe session storage
 _sessions: Dict[str, SessionData] = {}
 _sessions_lock = threading.Lock()
 
+SESSION_EXPIRY_HOURS = 1
+
 
 def get_session(session_id: str) -> Optional[SessionData]:
-    """Retrieves session by ID"""
     with _sessions_lock:
-        return _sessions.get(session_id, None)
+        session = _sessions.get(session_id)
+        if session:
+            expiry_time = session.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS)
+            if datetime.now() > expiry_time:
+                del _sessions[session_id]
+                return None
+            session.last_activity = datetime.now()
+        return session
 
 
 def create_session(session_id: str) -> SessionData:
-    """Creates new session"""
     with _sessions_lock:
+        _cleanup_expired_sessions()
         session = SessionData(
             session_id=session_id,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            last_activity=datetime.now()
         )
         _sessions[session_id] = session
-        logger.info(f"Created session: {session_id}")
         return session
 
 
@@ -75,16 +76,18 @@ def update_session(
     extracted_intelligence: Dict = None,
     indicators: List[str] = None
 ) -> SessionData:
-    """Updates existing session with new data"""
     with _sessions_lock:
         session = _sessions.get(session_id)
         
         if session is None:
             session = SessionData(
                 session_id=session_id,
-                created_at=datetime.now()
+                created_at=datetime.now(),
+                last_activity=datetime.now()
             )
             _sessions[session_id] = session
+        
+        session.last_activity = datetime.now()
         
         if message_count is not None:
             session.message_count = message_count
@@ -99,11 +102,7 @@ def update_session(
             session.conversation_history.append(new_message)
         
         if extracted_intelligence is not None:
-            for key in session.extracted_intelligence:
-                if key in extracted_intelligence:
-                    existing = set(session.extracted_intelligence[key])
-                    new_items = set(extracted_intelligence[key])
-                    session.extracted_intelligence[key] = list(existing.union(new_items))
+            _merge_intelligence(session, extracted_intelligence)
         
         if indicators is not None:
             existing = set(session.indicators)
@@ -113,30 +112,38 @@ def update_session(
         return session
 
 
+def _merge_intelligence(session: SessionData, new_intel: Dict):
+    for key in session.extracted_intelligence:
+        if key in new_intel and new_intel[key]:
+            existing = set(session.extracted_intelligence[key])
+            new_items = set(new_intel[key])
+            session.extracted_intelligence[key] = list(existing.union(new_items))
+
+
 def should_send_callback(session: SessionData) -> bool:
     """
     Determines if callback should be sent to GUVI
+    
+    UPDATED LOGIC: Wait for more messages to extract better intel
     """
     if session is None:
         return False
     
-    # 1. Don't send duplicates
     if session.callback_sent:
         return False
     
-    # 2. Must be a scam (GUVI Requirement)
     if not session.scam_detected:
         return False
     
-    # 3. Check triggers
-    # Max messages
+    # 1. Max messages reached (Safety trigger)
     max_messages = getattr(Config, 'MAX_MESSAGES', 10)
     if session.message_count >= max_messages:
         logger.info(f"Callback trigger: Max messages ({session.message_count})")
         session.callback_sent = True
         return True
     
-    # Intelligence threshold
+    # 2. Intelligence threshold + minimum engagement
+    # Wait for at least 6 messages before sending based on intelligence
     intel = session.extracted_intelligence
     total_items = (
         len(intel.get("upiIds", [])) +
@@ -148,40 +155,47 @@ def should_send_callback(session: SessionData) -> bool:
     )
     
     min_intel = getattr(Config, 'MIN_INTELLIGENCE_FOR_CALLBACK', 2)
-    if total_items >= min_intel:
-        logger.info(f"Callback trigger: Intelligence found ({total_items} items)")
+    
+    if total_items >= min_intel and session.message_count >= 6:
+        logger.info(f"Callback trigger: Intel ({total_items}) + Msgs ({session.message_count})")
         session.callback_sent = True
         return True
     
-    # High confidence trigger
-    if session.confidence >= 0.7 and session.message_count >= 4:
-        logger.info(f"Callback trigger: High confidence ({session.confidence})")
+    # 3. High confidence + significant engagement
+    # Wait for at least 8 messages if relying purely on confidence
+    if session.confidence >= 0.8 and session.message_count >= 8:
+        logger.info(f"Callback trigger: Confidence ({session.confidence}) + Msgs ({session.message_count})")
         session.callback_sent = True
         return True
     
     return False
 
 
+def _cleanup_expired_sessions():
+    now = datetime.now()
+    expired = []
+    for session_id, session in _sessions.items():
+        if now > session.last_activity + timedelta(hours=SESSION_EXPIRY_HOURS):
+            expired.append(session_id)
+    for session_id in expired:
+        del _sessions[session_id]
+
+
 def delete_session(session_id: str) -> bool:
-    """Removes session from storage"""
     with _sessions_lock:
         if session_id in _sessions:
             del _sessions[session_id]
-            logger.debug(f"Deleted session: {session_id}")
             return True
         return False
 
 
 def get_all_sessions() -> Dict[str, SessionData]:
-    """Returns all active sessions"""
     with _sessions_lock:
         return _sessions.copy()
 
 
 def clear_all_sessions() -> int:
-    """Clears all sessions"""
     with _sessions_lock:
         count = len(_sessions)
         _sessions.clear()
-        logger.info(f"Cleared {count} sessions")
         return count
