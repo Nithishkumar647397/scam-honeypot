@@ -31,7 +31,7 @@ def _cleanup():
     if _http_client:
         try:
             _http_client.close()
-        except:
+        except Exception:
             pass
 atexit.register(_cleanup)
 
@@ -73,7 +73,7 @@ def _call_with_retry(func, max_attempts=3):
 def _extract_reply_safe(response) -> str:
     try:
         return response.choices[0].message.content.strip()
-    except:
+    except Exception:
         return ""
 
 def detect_language(text: str) -> str:
