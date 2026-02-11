@@ -5,8 +5,9 @@ Owner: Member A
 Features:
 - Security hardened
 - Self-correction
-- Rich agent notes
+- Rich agent notes (with Sophistication Scoring)
 - Metadata-aware language detection
+- Honey Token Injection Strategy
 """
 
 from typing import List, Dict, Optional
@@ -31,7 +32,7 @@ def _cleanup():
     if _http_client:
         try:
             _http_client.close()
-        except Exception:
+        except:
             pass
 atexit.register(_cleanup)
 
@@ -73,7 +74,7 @@ def _call_with_retry(func, max_attempts=3):
 def _extract_reply_safe(response) -> str:
     try:
         return response.choices[0].message.content.strip()
-    except Exception:
+    except:
         return ""
 
 def detect_language(text: str) -> str:
@@ -84,12 +85,10 @@ def detect_language(text: str) -> str:
     return 'english'
 
 def get_dominant_language(history, current, metadata=None) -> str:
-    # 1. Metadata
     if metadata:
         lang = metadata.get("language", "").lower()
         if "hindi" in lang: return "hindi"
     
-    # 2. Weighted
     counts = {'english': 0, 'hindi': 0, 'hinglish': 0}
     for msg in history:
         if msg.get("sender") == "scammer":
@@ -98,17 +97,22 @@ def get_dominant_language(history, current, metadata=None) -> str:
     
     return max(counts, key=counts.get)
 
-def get_phase(count):
-    if count <= 2: return 'initial'
-    elif count <= 4: return 'trust_building'
-    elif count <= 7: return 'information_gathering'
+def get_conversation_phase(message_count: int) -> str:
+    if message_count <= 2: return 'initial'
+    elif message_count <= 4: return 'trust_building'
+    elif message_count <= 7: return 'information_gathering'
     else: return 'extraction'
 
 def build_system_prompt(language='english', phase='initial'):
     prompt = """You are Mrs. Kamala Devi, 67, retired teacher from Delhi.
 Traits: Tech-unsavvy, worried about money, polite but confused.
 Constraints: Short responses (<40 words). No asterisks (*actions*).
-Self-Correction: If you get confused, express it naturally, but don't repeat the same phrase too often."
+Self-Correction: If you say something suspicious or contradict yourself, say "Sorry, I got confused."
+
+STRATEGY - HONEY TOKENS (Fake Data):
+- If asked for account: Give partial fake ("Starts with 3748... can't read rest").
+- If asked for OTP: Pretend to read it wrong ("Is it 84... wait screen off").
+- Never give complete valid data. Stall them with partial info.
 """
     
     phases = {
@@ -132,24 +136,22 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
     try:
         client = _get_client()
         lang = get_dominant_language(conversation_history, sanitized, metadata)
-        phase = get_phase(len(conversation_history))
+        phase = get_conversation_phase(len(conversation_history))
         safe_inds = _sanitize_indicators(scam_indicators)
         
         messages = [{"role": "system", "content": build_system_prompt(lang, phase)}]
         if safe_inds: messages[0]['content'] += f"\nScam detected: {', '.join(safe_inds)}"
         
-        # History
         for msg in conversation_history[-MAX_HISTORY_MESSAGES:]:
             role = "user" if msg.get("sender") == "scammer" else "assistant"
             messages.append({"role": role, "content": _sanitize_input(msg.get("text", ""))})
         messages.append({"role": "user", "content": sanitized})
         
         resp = _call_with_retry(lambda: client.chat.completions.create(
-            model=Config.GROQ_MODEL, messages=messages, max_tokens=150
+            model=Config.GROQ_MODEL, messages=messages, max_tokens=150, temperature=Config.GROQ_TEMPERATURE
         ))
         
         reply = _extract_reply_safe(resp)
-        # Cleanup
         reply = re.sub(r'\*[^*]+\*', '', reply).strip()
         reply = re.sub(r'^As Kamala: ', '', reply).strip()
         
@@ -166,12 +168,23 @@ def analyze_tactics(history, indicators):
     if any(w in text for w in ['urgent', 'now']): tactics.append("urgency")
     if any(w in text for w in ['police', 'blocked']): tactics.append("fear")
     if any(w in text for w in ['otp', 'pin']): tactics.append("credential_harvesting")
+    if any(w in text for w in ['won', 'lottery']): tactics.append("greed")
     return tactics
 
+def calculate_sophistication(tactics, intel):
+    score = 0
+    score += len(tactics)
+    score += len(intel.get("upiIds", [])) * 2
+    score += len(intel.get("bankAccounts", [])) * 2
+    
+    if score < 2: return "Low"
+    if score < 5: return "Medium"
+    return "High"
+
 def generate_agent_notes(conversation_history, scam_indicators, extracted_intelligence, emails_found=None):
-    """Generates rich, descriptive notes for judges"""
     tactics = analyze_tactics(conversation_history, scam_indicators)
     intel = extracted_intelligence
+    sophistication = calculate_sophistication(tactics, intel)
     
     notes = []
     
@@ -179,7 +192,10 @@ def generate_agent_notes(conversation_history, scam_indicators, extracted_intell
     if tactics:
         notes.append(f"Scammer used {', '.join(tactics)} tactics.")
     
-    # Sentence 2: Extraction Detail
+    # Sentence 2: Sophistication
+    notes.append(f"Sophistication Level: {sophistication}.")
+    
+    # Sentence 3: Extraction Detail
     extracted = []
     if intel.get("upiIds"): extracted.append(f"UPIs: {', '.join(intel['upiIds'][:3])}")
     if intel.get("phoneNumbers"): extracted.append(f"Phones: {', '.join(intel['phoneNumbers'][:3])}")
@@ -191,7 +207,4 @@ def generate_agent_notes(conversation_history, scam_indicators, extracted_intell
     else:
         notes.append("No actionable intel extracted.")
         
-    # Sentence 3: Stats
-    notes.append(f"Confidence: High. Messages: {len(conversation_history)}.")
-    
     return " ".join(notes)

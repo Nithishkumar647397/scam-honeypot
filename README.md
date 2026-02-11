@@ -5,6 +5,12 @@ Flask
 Groq
 Render
 
+1️⃣ The Core Idea
+Traditional scam prevention is reactive (block & warn). Our system is proactive. It turns scam attempts into structured cyber-threat intelligence by engaging scammers.
+
+2️⃣ The Core Philosophy
+Convert every scam interaction into a data point. Waste scammer time while mapping their network.
+
 📜 Project Overview
 Traditional scam prevention systems simply block suspicious messages. This solution fights back.
 
@@ -25,6 +31,9 @@ Smart Extraction: Captures UPI IDs, Bank Accounts, IFSC Codes, Phone Numbers, Aa
 Obfuscation Handling: Decodes disguised numbers (e.g., "nine eight seven..." → 987) and symbols ("paytm at ybl" → paytm@ybl).
 Hindi/Hinglish Number Extraction: Converts "nau aath saat chhe paanch" → 98765.
 Confidence Scoring: Each extracted piece of intelligence is tagged with a confidence score and source message.
+🎯 Scam Confidence Index
+Instead of binary detection, we calculate a 0-100 score based on urgency, threats, and financial patterns to minimize false positives.
+
 🛡️ Enterprise-Grade Security
 Input Sanitization: Prevents prompt injection attacks against the LLM.
 Thread Safety: Handles concurrent requests safely using thread-safe session management.
@@ -34,6 +43,9 @@ API Key Authentication: All requests validated via x-api-key header.
 Honey Token Injection: Feeds scammers partial fake data to keep them engaged and revealing more infrastructure.
 Scammer Profiling: Builds a behavioral profile including sophistication level, tactics used, and estimated operating patterns.
 Game Theory Approach: 5-phase conversation strategy (Panic → Trust → Confusion → Almost There → Complications) designed to maximize intelligence extraction.
+📊 Scammer Behavior Profiling
+We calculate a Sophistication Level (Low/Medium/High) based on the diversity of tactics used and the complexity of financial infrastructure revealed.
+
 🏗️ System Architecture
 text
 
@@ -53,21 +65,27 @@ text
 │                                          │         │            │
 │                                   Polite Reply  AI Agent        │
 │                                                    │            │
-│                                          ┌─────────┴──────┐    │
-│                                          │                │    │
+│                                          ┌─────────┴──────┐     │
+│                                          │                │     │
 │                                    Generate Reply   Extract Intel│
-│                                          │                │    │
-│                                          │         Session Store │
-│                                          │                │    │
+│                                          │                │     │
+│                                          │         Session Store│
+│                                          │                │     │
 │                                          │       Should Callback?│
 │                                          │         │         │  │
 │                                          │       YES        NO  │
 │                                          │         │         │  │
-│                                          │   GUVI Endpoint  Wait │
+│                                          │   GUVI Endpoint  Wait│
 │                                          │                      │
 │                                   Response to Platform          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
+System Flow Summary
+Input: Suspicious message arrives.
+Decision: Scam Confidence Index calculated.
+Engagement: AI Agent activates (Initial → Trust → Extraction phases).
+Extraction: Real-time regex capture of financial identifiers.
+Callback: Smart Progressive callback sends intelligence to GUVI.
 🔔 Smart Callback Strategy (Critical Logic)
 The system uses a Smart Progressive callback strategy to ensure 100% intelligence capture without missing data from long conversations.
 
@@ -119,7 +137,7 @@ Ambiguous Message	Agent responds cautiously, monitors for follow-up scam signals
 text
 
 ┌─────────────────────────────────────────────────────────────┐
-│                  MULTI-TURN ENGAGEMENT                       │
+│                  MULTI-TURN ENGAGEMENT                      │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  Phase 1: PANIC                                             │
@@ -129,26 +147,33 @@ text
 │                                                             │
 │  Phase 2: TRUST BUILDING                                    │
 │  ────────────────────                                       │
-│  Scammer: "Send ₹500 to verify@paytm to unblock."          │
+│  Scammer: "Send ₹500 to verify@paytm to unblock."           │
 │  Agent:   "I don't understand this UPI... which app beta?"  │
 │                                                             │
 │  Phase 3: INFORMATION GATHERING                             │
-│  ──────────────────────────────                              │
+│  ──────────────────────────────                             │
 │  Scammer: "Use PhonePe, send to 9876543210."                │
 │  Agent:   "Ok beta, I am trying... it's very slow 😅"       │
 │           [Intel captured: verify@paytm, 9876543210]        │
 │                                                             │
 │  Phase 4: EXTRACTION (Stalling)                             │
-│  ──────────────────────────────                              │
+│  ──────────────────────────────                             │
 │  Agent:   "Error aa raha hai... koi aur number hai kya?"    │
 │  Scammer: "Try backup@ybl or call 9123456789"               │
 │           [Intel captured: backup@ybl, 9123456789]          │
 │                                                             │
 │  ✅ CALLBACK TRIGGERED → Sent to GUVI                       │
-│  📊 Total Intel: 2 UPI IDs, 2 Phone Numbers                │
+│  📊 Total Intel: 2 UPI IDs, 2 Phone Numbers                 │
 │  ⏱️  Time Wasted: ~12 minutes                               │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
+🎯 Differentiation
+We don't just block. We engage, stall, and extract. We turn the scammer's attack against them.
+
+🌍 Real-World Impact
+Banks: Detect mule accounts early.
+Telecom: Track repeated offender numbers.
+Law Enforcement: Receive structured evidence logs.
 ⚡ Performance & Stability
 Metric	Value
 Average Response Time	~800ms
@@ -163,6 +188,11 @@ API Endpoint:
 text
 
 https://scam-honeypot-y77x.onrender.com/honeypot
+Dashboard:
+
+text
+
+https://scam-honeypot-y77x.onrender.com/dashboard
 Interactive Chat Tester (WhatsApp-style UI):
 
 text
@@ -328,6 +358,9 @@ AI Model	Llama-3-8b via Groq API	Ultra-fast inference (~300ms), free tier availa
 Data Extraction	Regex + NLP patterns	Reliable, no external dependencies
 Session Store	In-memory (Thread-safe dict)	Zero latency, sufficient for hackathon scale
 Deployment	Render Cloud	Free tier, auto-deploy from Git
+⚠️ Limitations
+In-memory session storage (non-persistent).
+Dependent on LLM API availability.
 ⚖️ Ethical Considerations
 Principle	Implementation
 ❌ No Impersonation	Uses fictional persona "Mrs. Kamala Devi" — not a real individual
@@ -335,7 +368,10 @@ Principle	Implementation
 ❌ No Harassment	Agent remains polite and non-threatening at all times
 ✅ Responsible Data Handling	No persistent storage — session data held in memory only during active engagement
 ✅ Safe Engagement	Agent is strictly instructed to never share real personal data
+🎯 Final Positioning
+This is not a chatbot. It is a lightweight cyber-intelligence extraction engine.
+
 👥 Contributors
 Member A — AI Agent Logic, LLM Integration, Intelligence Extraction Engine
 Member B — Infrastructure, API Design, Session Management, Deployment
-<p align="center"> <b>Built with ❤️ for GUVI | HCL Hackathon 2026</b> </p>
+<p align="center"> <b>Built for India AI Impact Buildathon</b> </p>
