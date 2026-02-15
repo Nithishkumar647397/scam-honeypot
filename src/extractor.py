@@ -11,7 +11,8 @@ from src.patterns import (
     find_ifsc_codes,
     find_urls,
     find_scam_keywords,
-    find_emails
+    find_emails,
+    find_scammer_ids
 )
 
 
@@ -83,7 +84,8 @@ def _extract_from_text(text: str) -> Dict[str, List[str]]:
         "ifscCodes": find_ifsc_codes(text),
         "phishingLinks": find_urls(text),
         "suspiciousKeywords": find_scam_keywords(text),
-        "emails": find_emails(text)
+        "emails": find_emails(text),
+        "scammerIds": find_scammer_ids(text)
     }
 
 
@@ -132,7 +134,7 @@ def count_intelligence_items(intelligence: Dict[str, List[str]]) -> int:
     if not intelligence:
         return 0
     
-    high_value_keys = ["upiIds", "bankAccounts", "phoneNumbers", "ifscCodes", "phishingLinks", "emails"]
+    high_value_keys = ["upiIds", "bankAccounts", "phoneNumbers", "ifscCodes", "phishingLinks", "emails", "scammerIds"]
     
     total = 0
     for key in high_value_keys:
@@ -196,5 +198,6 @@ def _empty_intelligence() -> Dict[str, List[str]]:
         "ifscCodes": [],
         "phishingLinks": [],
         "suspiciousKeywords": [],
-        "emails": []
+        "emails": [],
+        "scammerIds": []
     }

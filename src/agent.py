@@ -272,6 +272,7 @@ def generate_agent_notes(
     if intel.get("bankAccounts"): extracted.append(f"Banks: {', '.join(intel['bankAccounts'][:3])}")
     if intel.get("phishingLinks"): extracted.append(f"Links: {', '.join(intel['phishingLinks'][:2])}")
     if emails_found: extracted.append(f"Emails: {', '.join(emails_found[:3])}")
+    if intel.get("scammerIds"): extracted.append(f"IDs: {', '.join(intel['scammerIds'][:3])}")
     
     if extracted: notes.append(f"Extracted: {'; '.join(extracted)}.")
     else: notes.append("No actionable intel extracted.")

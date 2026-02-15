@@ -50,6 +50,7 @@ IFSC_PATTERN = r'\b[A-Z]{4}0[A-Z0-9]{6}\b'
 URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+(?<![.,;:!?\)\]])'
 SHORTENED_URL_PATTERN = r'\b(?:' + '|'.join(re.escape(d) for d in SHORTENED_DOMAINS) + r')/[a-zA-Z0-9]+'
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+SCAMMER_ID_PATTERN = r'(?i)\b(?:ID|Badge|Reference|Ref)\s*[:#-]?\s*([A-Z0-9]{4,15})\b'
 
 SCAM_KEYWORDS: List[str] = [
     "urgent", "immediately", "now", "today", "expire", "hurry",
@@ -173,3 +174,15 @@ def find_scam_keywords(text: str) -> List[str]:
     for k in SCAM_KEYWORDS + HINGLISH_KEYWORDS:
         if k.lower() in text_lower: found.add(k.lower())
     return list(found)
+
+def find_scammer_ids(text: str) -> List[str]:
+    text = _prepare_text(text)
+    if not text: return []
+    matches = re.findall(SCAMMER_ID_PATTERN, text)
+    filtered = []
+    common_words = {'CARD', 'NUMBER', 'CODE', 'HERE', 'THIS', 'THAT', 'YOUR', 'NAME', 'DATA', 'INFO', 'TEXT', 'LINK', 'BANK', 'USER', 'ACCT', 'TYPE', 'CHECK', 'VERIFY'}
+    for match in matches:
+        clean_match = match.upper().strip()
+        if clean_match in common_words: continue
+        filtered.append(clean_match)
+    return list(set(filtered))
