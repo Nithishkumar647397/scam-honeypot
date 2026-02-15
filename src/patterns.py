@@ -23,7 +23,7 @@ UPI_DOMAINS: Set[str] = {
     'imobile', 'iob', 'jkb', 'karb', 'kaypay', 'kbl', 'kvb',
     'lvb', 'mahb', 'obc', 'okbizaxis', 'payzapp', 'psb', 'rajgovhdfcbank',
     'rblbank', 'sib', 'srcb', 'tmb', 'ubi', 'uboi', 'uco', 'vijb', 'yapl',
-    'fakebank'
+    'fakebank', 'fakeupi'
 }
 
 EMAIL_DOMAINS: Set[str] = {
@@ -83,6 +83,12 @@ def find_upi_ids(text: str) -> List[str]:
     if not text: return []
     matches = re.findall(UPI_PATTERN, text, re.IGNORECASE)
     filtered = []
+    
+    # Check for payment context
+    text_lower = text.lower()
+    payment_keywords = {'send', 'pay', 'transfer', 'upi', 'payment'}
+    has_payment_context = any(k in text_lower for k in payment_keywords)
+    
     for match in matches:
         parts = match.split('@')
         if len(parts) != 2: continue
@@ -93,6 +99,7 @@ def find_upi_ids(text: str) -> List[str]:
         if domain in UPI_DOMAINS: is_valid_domain = True
         elif any(upi_dom in domain for upi_dom in UPI_DOMAINS): is_valid_domain = True
         elif 'bank' in domain and domain not in EMAIL_DOMAINS: is_valid_domain = True
+        elif has_payment_context and domain not in EMAIL_DOMAINS: is_valid_domain = True
         if is_valid_domain: filtered.append(match.lower())
     return list(set(filtered))
 
@@ -128,7 +135,7 @@ def find_phone_numbers(text: str) -> List[str]:
     text = re.sub(r'\+91\s+', '+91', text)
     matches = re.findall(PHONE_PATTERN, text)
     # Clean up results
-    cleaned = [m.replace('+91', '').strip() for m in matches]
+    cleaned = [m.strip() for m in matches]
     return list(set(cleaned))
 
 def find_ifsc_codes(text: str) -> List[str]:
