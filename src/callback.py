@@ -3,10 +3,10 @@ GUVI callback module
 Owner: Member B
 
 Fixes:
-- Added logging instead of print
+- Added logging
 - Added emails to notes summary
-- Added retry logic for network stability
-- Fixed async function to use actual threading
+- Added retry logic
+- ADDED: emailAddresses to structured payload (Per Evaluation Doc)
 """
 
 import logging
@@ -39,7 +39,9 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
             "upiIds": intel.get("upiIds", []),
             "phishingLinks": intel.get("phishingLinks", []),
             "phoneNumbers": intel.get("phoneNumbers", []),
-            "suspiciousKeywords": intel.get("suspiciousKeywords", [])
+            "suspiciousKeywords": intel.get("suspiciousKeywords", []),
+            # Added per new documentation requirements:
+            "emailAddresses": intel.get("emails", []) 
         },
         "agentNotes": agent_notes if agent_notes else generate_default_notes(session)
     }
