@@ -35,7 +35,8 @@ class SessionData:
         "ifscCodes": [],
         "phishingLinks": [],
         "suspiciousKeywords": [],
-        "emails": []
+        "emails": [],
+        "scammerIds": []
     })
     indicators: List[str] = field(default_factory=list)
     callback_sent: bool = False
@@ -122,7 +123,8 @@ def _count_intel(session: SessionData) -> int:
         len(intel.get("phoneNumbers", [])) +
         len(intel.get("ifscCodes", [])) +
         len(intel.get("phishingLinks", [])) +
-        len(intel.get("emails", []))
+        len(intel.get("emails", [])) +
+        len(intel.get("scammerIds", []))
     )
 
 

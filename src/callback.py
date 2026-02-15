@@ -45,7 +45,9 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
             "phishingLinks": intel.get("phishingLinks", []),
             "phoneNumbers": intel.get("phoneNumbers", []),
             "suspiciousKeywords": intel.get("suspiciousKeywords", []),
-            "emailAddresses": intel.get("emails", [])
+            "emailAddresses": intel.get("emails", []),
+            "ifscCodes": intel.get("ifscCodes", []),
+            "scammerIds": intel.get("scammerIds", [])
         },
         
         # REQUIRED: Engagement Metrics (2.5 pts)
