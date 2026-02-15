@@ -5,7 +5,7 @@ Owner: Member A
 Features:
 - Security hardened
 - Self-correction
-- Rich agent notes (Sophistication, Playbook, Abuse, Language)
+- Rich agent notes (Sophistication, Playbook, Abuse, Language, Severity)
 - Metadata-aware language detection
 - Consistent Honey Token Injection
 - Bank-Specific Knowledge
@@ -24,7 +24,7 @@ from groq import Groq
 import httpx
 from src.config import Config
 
-# NOTE: detect_playbook is imported inside functions to avoid circular deps
+# NOTE: detect_playbook and calculate_severity imported inside functions
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,9 @@ BANK_APP_KNOWLEDGE = {
     'kotak': ["Kotak 811 app error", "CRN number forgot"],
     'paytm': ["Paytm KYC pending", "Wallet inactive"],
     'phonepe': ["UPI PIN not setting", "Bank server busy"],
-    'gpay': ["GPay server timeout", "Payment processing stuck"]
+    'gpay': ["GPay server timeout", "Payment processing stuck"],
+    'google pay': ["GPay server timeout", "Payment processing stuck"],  # Alias
+    'bhim': ["BHIM app invalid UPI ID error"]
 }
 
 def _sanitize_input(text: str) -> str:
@@ -221,21 +223,7 @@ def analyze_tactics(history, indicators):
     return list(set(tactics))  # Deduplicate
 
 def calculate_sophistication(tactics, intel):
-    """Calculates Scammer Sophistication Score (Low/Medium/High/Very High)"""
-    score = len(tactics)
-    score += len(intel.get("upiIds", [])) * 2
-    score += len(intel.get("bankAccounts", [])) * 2
-    score += len(intel.get("phishingLinks", [])) * 2
-    score += len(intel.get("ifscCodes", [])) * 2
-    score += len(intel.get("phoneNumbers", [])) * 1
-    
-    # Multi-vector bonus
-    vector_count = 0
-    if intel.get("upiIds"): vector_count += 1
-    if intel.get("bankAccounts"): vector_count += 1
-    if intel.get("phishingLinks"): vector_count += 1
-    if vector_count >= 3: score += 2
-    
+    score = len(tactics) + len(intel.get("upiIds", []))*2 + len(intel.get("bankAccounts", []))*2 + len(intel.get("phishingLinks", []))*2
     if score < 2: return "Low"
     if score < 5: return "Medium"
     if score < 8: return "High"
@@ -253,8 +241,7 @@ def generate_agent_notes(
     """
     Generates rich, descriptive agent notes.
     """
-    # Local import to avoid circular dependency at module level
-    from src.detector import detect_playbook
+    from src.detector import detect_playbook, calculate_severity  # Added calculate_severity import
     
     tactics = analyze_tactics(conversation_history, scam_indicators)
     intel = extracted_intelligence
@@ -269,6 +256,10 @@ def generate_agent_notes(
     # 1. Threat Assessment
     if tactics: notes.append(f"Scammer used {', '.join(tactics)} tactics.")
     notes.append(f"Sophistication: {sophistication}.")
+    
+    # Severity (NEW)
+    severity = calculate_severity(scam_indicators)
+    notes.append(f"Severity: {severity.upper()}.")
     
     # 2. Playbook
     if playbook_result and playbook_result.get("confidence", 0) > 0.3:
