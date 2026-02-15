@@ -23,7 +23,7 @@ try:
 except ImportError:
     # Fallback stubs if detector.py is old
     def detect_scam(msg, hist=None): return (False, 0.0, [], [])
-    def check_abuse(msg): return {"abusive": False, "tier": "none"}
+    def check_abuse(msg): return {"abusive": False, "tier": "none", "matched": [], "action": "continue"}
     def detect_playbook(hist): return {}
 
 logging.basicConfig(level=logging.INFO)
@@ -141,7 +141,7 @@ def process_honeypot_request():
             playbook_result = detect_playbook(session.conversation_history)
             if playbook_result.get("confidence", 0) > 0.3:
                 logger.info(f"Playbook: {playbook_result['playbook']} -> Next: {playbook_result.get('next_expected')}")
-        except Exception: pass
+        except Exception as e: logger.debug(f"Playbook error: {e}")
         
         # 6. Generate Reply
         reply = generate_agent_reply(
