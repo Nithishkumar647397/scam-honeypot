@@ -5,6 +5,7 @@ Owner: Member A
 Features:
 - Regex + Keyword detection
 - Safe context penalty (reduces false positives)
+- Amplifying context bonus (increases true positives)
 - Playbook detection (predicts next move)
 - Abuse detection (ethical guard)
 - Severity scoring
@@ -58,6 +59,18 @@ SAFE_CONTEXTS = {
     "routine": {"words": ["meeting", "dinner", "lunch", "birthday", "wedding", "exam", "shopping"], "penalty": -0.08}
 }
 
+# Amplifying Contexts (Increases score) - NEW
+AMPLIFYING_CONTEXTS = {
+    "isolation": {
+        "words": ["don't tell anyone", "secret", "confidential", "just between us", "nobody should know", "kisiko mat batana", "private hai"],
+        "bonus": +0.20
+    },
+    "deadline": {
+        "words": ["within 1 hour", "before 5pm", "today only", "last chance", "final warning", "aakhri mauka", "abhi ke abhi"],
+        "bonus": +0.15
+    }
+}
+
 # Abuse Tiers
 ABUSE_TIERS = {
     "critical": {"words": ["kill", "rape", "terror", "bomb", "murder", "suicide", "die", "shoot"], "action": "disengage"},
@@ -89,17 +102,32 @@ def _check_patterns(text: str, patterns: List[str]) -> bool:
     return any(pattern in text for pattern in patterns)
 
 def apply_context_modifiers(text: str, base_score: float) -> Tuple[float, List[str]]:
-    """Applies safe context penalties"""
+    """Applies safe context penalties and amplifying bonuses"""
     text_lower = text.lower()
     modifiers = []
     score = base_score
     
+    # Safe Contexts (Reduce Score)
     for category, data in SAFE_CONTEXTS.items():
         if any(w in text_lower for w in data["words"]):
             score += data["penalty"]
             modifiers.append(f"safe_{category}({data['penalty']})")
             
+    # Amplifying Contexts (Increase Score)
+    for category, data in AMPLIFYING_CONTEXTS.items():
+        if any(w in text_lower for w in data["words"]):
+            score += data["bonus"]
+            modifiers.append(f"amplify_{category}(+{data['bonus']})")
+            
     return max(0.0, score), modifiers
+
+def calculate_severity(indicators: List[str]) -> str:
+    """Calculates scam severity based on indicators"""
+    for indicator in indicators:
+        if indicator in SEVERITY_RULES['high']: return "high"
+    for indicator in indicators:
+        if indicator in SEVERITY_RULES['medium']: return "medium"
+    return "low"
 
 def check_abuse(text: str) -> dict:
     """Checks for abusive language"""
@@ -153,6 +181,7 @@ def detect_scam(message: str, conversation_history: Optional[List[Dict]] = None)
     message_lower = message.lower()
     indicators = []
     confidence = 0.0
+    modifiers = [] # Initialize here to prevent loss on exception
     
     try:
         # Pattern checks
@@ -169,7 +198,7 @@ def detect_scam(message: str, conversation_history: Optional[List[Dict]] = None)
         if find_phone_numbers(message): indicators.append("contains_phone"); confidence += WEIGHTS['contains_phone']
         if find_bank_accounts(message): indicators.append("contains_bank_account"); confidence += WEIGHTS['contains_bank_account']
         
-        # Apply Safe Context Modifiers
+        # Apply Context Modifiers (Safe + Amplifying)
         confidence, modifiers = apply_context_modifiers(message, confidence)
         
         # History analysis
@@ -178,7 +207,7 @@ def detect_scam(message: str, conversation_history: Optional[List[Dict]] = None)
             
     except Exception as e:
         logger.error(f"Detection error: {e}")
-        modifiers = []
+        # modifiers are preserved even if error occurs late
     
     confidence = min(1.0, confidence)
     is_scam = confidence >= SCAM_THRESHOLD or len(indicators) >= MIN_INDICATORS_FOR_SCAM
