@@ -5,7 +5,7 @@ Owner: Member A
 Features:
 - Security hardened
 - Self-correction
-- Rich agent notes (Sophistication, Playbook, Abuse, Language, Severity)
+- Rich agent notes (Sophistication, Playbook, Abuse, Language, Severity, IDs)
 - Metadata-aware language detection
 - Consistent Honey Token Injection
 - Bank-Specific Knowledge
@@ -62,7 +62,7 @@ BANK_APP_KNOWLEDGE = {
     'paytm': ["Paytm KYC pending", "Wallet inactive"],
     'phonepe': ["UPI PIN not setting", "Bank server busy"],
     'gpay': ["GPay server timeout", "Payment processing stuck"],
-    'google pay': ["GPay server timeout", "Payment processing stuck"],  # Alias
+    'google pay': ["GPay server timeout", "Payment processing stuck"],
     'bhim': ["BHIM app invalid UPI ID error"]
 }
 
@@ -147,6 +147,13 @@ STRATEGY:
 - Never give complete valid data. Stall with partial info.
 - If asked for OTP: Pretend to read it wrong.
 
+HUMAN QUIRKS (Use these randomly):
+- Make occasional typos: "accont", "numbr"
+- Use fillers: "umm", "arre", "haan"
+- Show emotions: "Hai Ram!", "Oh god"
+- Misname tech terms: "OPT thing", "UBI ID"
+- Sometimes just respond with: "What??" or "Haan?"
+
 {bank_context}
 {playbook_hint}
 """
@@ -159,7 +166,7 @@ STRATEGY:
     prompt += phases.get(phase, phases['initial'])
     
     langs = {
-        'hindi': "\nLanguage: Hindi (Devanagari). Example: अरे नहीं!",
+        'hindi': "\nLanguage: Hindi (Devanagari). Example: अरे नहीं! क्या हुआ?",
         'hinglish': "\nLanguage: Hinglish. Example: Arey nahi! Kya hua?",
         'english': "\nLanguage: Simple English. Example: Oh no! What happened?"
     }
@@ -208,22 +215,31 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
 def analyze_tactics(history, indicators):
     text = " ".join([m.get("text", "").lower() for m in history if m.get("sender") == "scammer"])
     tactics = []
-    
-    # Original Checks
     if any(w in text for w in ['urgent', 'now', 'immediately']): tactics.append("urgency")
     if any(w in text for w in ['police', 'blocked', 'legal', 'arrest']): tactics.append("fear")
     if any(w in text for w in ['otp', 'pin', 'password', 'cvv']): tactics.append("credential_harvesting")
     if any(w in text for w in ['won', 'lottery', 'prize', 'bonus']): tactics.append("greed")
-    
-    # New Checks (Priority 10)
     if any(w in text for w in ['bank manager', 'rbi', 'officer', 'government']): tactics.append("authority_impersonation")
     if any(w in text for w in ['don\'t tell', 'secret', 'confidential', 'between us']): tactics.append("isolation")
     if any(w in text for w in ['send money', 'transfer', 'pay now', 'upi', 'deposit']): tactics.append("payment_redirection")
+    return list(set(tactics))
+
+# === RE-ADDED FUNCTION ===
+def calculate_sophistication(tactics, intel):
+    """Calculates Scammer Sophistication Score"""
+    score = len(tactics)
+    score += len(intel.get("upiIds", [])) * 2
+    score += len(intel.get("bankAccounts", [])) * 2
+    score += len(intel.get("phishingLinks", [])) * 2
+    score += len(intel.get("ifscCodes", [])) * 2
+    score += len(intel.get("phoneNumbers", [])) * 1
+    score += len(intel.get("emails", [])) * 1
+    score += len(intel.get("scammerIds", [])) * 1
     
-    return list(set(tactics))  # Deduplicate
-
-
-
+    if score < 2: return "Low"
+    if score < 5: return "Medium"
+    if score < 8: return "High"
+    return "Very High"
 
 def generate_agent_notes(
     conversation_history: List[Dict], 
@@ -234,34 +250,26 @@ def generate_agent_notes(
     context_modifiers: Optional[List[str]] = None,
     abuse_check: Optional[Dict] = None
 ) -> str:
-    """
-    Generates rich, descriptive agent notes.
-    """
-    from src.detector import detect_playbook, calculate_severity  # Added calculate_severity import
+    """Generates rich agent notes."""
+    from src.detector import detect_playbook, calculate_severity
     
     tactics = analyze_tactics(conversation_history, scam_indicators)
     intel = extracted_intelligence
     sophistication = calculate_sophistication(tactics, intel)
     
-    # Use passed playbook result or detect it now
     if not playbook_result:
         playbook_result = detect_playbook(conversation_history)
     
     notes = []
-    
-    # 1. Threat Assessment
     if tactics: notes.append(f"Scammer used {', '.join(tactics)} tactics.")
     notes.append(f"Sophistication: {sophistication}.")
     
-    # Severity (NEW)
     severity = calculate_severity(scam_indicators)
     notes.append(f"Severity: {severity.upper()}.")
     
-    # 2. Playbook
     if playbook_result and playbook_result.get("confidence", 0) > 0.3:
         notes.append(f"Playbook: {playbook_result['description']} ({int(playbook_result['confidence']*100)}%). Next: {playbook_result.get('next_expected')}.")
     
-    # 3. Extraction Detail
     extracted = []
     if intel.get("upiIds"): extracted.append(f"UPIs: {', '.join(intel['upiIds'][:3])}")
     if intel.get("phoneNumbers"): extracted.append(f"Phones: {', '.join(intel['phoneNumbers'][:3])}")
@@ -273,19 +281,13 @@ def generate_agent_notes(
     if extracted: notes.append(f"Extracted: {'; '.join(extracted)}.")
     else: notes.append("No actionable intel extracted.")
     
-    # 4. Context & Ethics
-    if context_modifiers:
-        notes.append(f"Modifiers: {', '.join(context_modifiers)}.")
-    
-    if abuse_check and abuse_check.get("tier") != "none":
-        notes.append(f"Abuse: {abuse_check['tier']} ({', '.join(abuse_check.get('matched', []))}).")
+    if context_modifiers: notes.append(f"Modifiers: {', '.join(context_modifiers)}.")
+    if abuse_check and abuse_check.get("tier") != "none": notes.append(f"Abuse: {abuse_check['tier']} ({', '.join(abuse_check.get('matched', []))}).")
         
-    # 5. Engagement Stats
     scammer_msgs = sum(1 for m in conversation_history if m.get("sender") == "scammer")
     agent_msgs = len(conversation_history) - scammer_msgs
     notes.append(f"Engagement: {scammer_msgs} scammer msgs, {agent_msgs} agent msgs.")
     
-    # 6. Language
     lang = get_dominant_language(conversation_history, "")
     notes.append(f"Lang: {lang}.")
         
