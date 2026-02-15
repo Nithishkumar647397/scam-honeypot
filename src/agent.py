@@ -222,12 +222,8 @@ def analyze_tactics(history, indicators):
     
     return list(set(tactics))  # Deduplicate
 
-def calculate_sophistication(tactics, intel):
-    score = len(tactics) + len(intel.get("upiIds", []))*2 + len(intel.get("bankAccounts", []))*2 + len(intel.get("phishingLinks", []))*2
-    if score < 2: return "Low"
-    if score < 5: return "Medium"
-    if score < 8: return "High"
-    return "Very High"
+
+
 
 def generate_agent_notes(
     conversation_history: List[Dict], 
