@@ -91,12 +91,8 @@ def update_session(
         if new_message is not None:
             session.conversation_history.append(new_message)
             
-        # Auto-calculate message count from history if not provided
-        # This is the CRITICAL FIX for the "stuck at 6" bug
-        if message_count is not None:
-            session.message_count = message_count
-        else:
-            session.message_count = len(session.conversation_history)
+        # Always calculate message count from history length
+        session.message_count = len(session.conversation_history)
         
         if scam_detected is not None:
             session.scam_detected = scam_detected
