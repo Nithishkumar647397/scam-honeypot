@@ -45,7 +45,7 @@ SHORTENED_DOMAINS: List[str] = [
 
 UPI_PATTERN = r'[a-zA-Z0-9._-]+@[a-zA-Z]{2,}'
 BANK_ACCOUNT_PATTERN = r'\b[1-9]\d{8,17}\b'
-PHONE_PATTERN = r'(?:\+91[\-\s]?)?[6-9]\d{9}\b'  # Updated to handle +91
+PHONE_PATTERN = r'(?:\+91[\-\s]?)?[6-9]\d{9}\b'
 IFSC_PATTERN = r'\b[A-Z]{4}0[A-Z0-9]{6}\b'
 URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+(?<![.,;:!?\)\]])'
 SHORTENED_URL_PATTERN = r'\b(?:' + '|'.join(re.escape(d) for d in SHORTENED_DOMAINS) + r')/[a-zA-Z0-9]+'
@@ -131,12 +131,27 @@ def find_bank_accounts(text: str) -> List[str]:
 def find_phone_numbers(text: str) -> List[str]:
     text = _prepare_text(text)
     if not text: return []
-    # Normalize +91 spacing
-    text = re.sub(r'\+91\s+', '+91', text)
+
     matches = re.findall(PHONE_PATTERN, text)
-    # Clean up results
-    cleaned = [m.strip() for m in matches]
-    return list(set(cleaned))
+    all_variants = set()
+
+    for match in matches:
+        # 1. Add the raw match, stripped of whitespace
+        raw_match = match.strip()
+        all_variants.add(raw_match)
+
+        # 2. Create normalized versions to ensure substring matching
+        core_number = re.sub(r'[^0-9]', '', raw_match)[-10:]
+
+        # Add 10-digit version
+        all_variants.add(core_number)
+
+        # If it had a country code, add normalized +91 versions
+        if '+91' in raw_match or (len(re.sub(r'[^0-9]', '', raw_match)) == 12 and raw_match.startswith('91')):
+            all_variants.add(f"+91{core_number}")
+            all_variants.add(f"+91-{core_number}")
+
+    return list(all_variants)
 
 def find_ifsc_codes(text: str) -> List[str]:
     text = _prepare_text(text)
