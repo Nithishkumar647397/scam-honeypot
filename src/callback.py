@@ -37,6 +37,7 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
         "sessionId": session.session_id,
         "status": "completed",
         "scamDetected": session.scam_detected,
+        "totalMessagesExchanged": session.message_count,
         
         # REQUIRED: Structured Intelligence
         "extractedIntelligence": {
