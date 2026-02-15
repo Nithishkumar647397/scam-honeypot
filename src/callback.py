@@ -35,8 +35,8 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
     
     return {
         "sessionId": session.session_id,
+        "status": "completed",
         "scamDetected": session.scam_detected,
-        "totalMessagesExchanged": session.message_count,
         
         # REQUIRED: Structured Intelligence
         "extractedIntelligence": {
@@ -50,9 +50,8 @@ def build_callback_payload(session: SessionData, agent_notes: str = "") -> Dict:
         
         # REQUIRED: Engagement Metrics (2.5 pts)
         "engagementMetrics": {
-            "durationSeconds": int(duration_seconds),
-            "turnCount": int(session.message_count / 2),
-            "responseLatency": "800ms"  # Estimated
+            "totalMessagesExchanged": session.message_count,
+            "engagementDurationSeconds": int(duration_seconds)
         },
         
         # OPTIONAL: Agent Notes (2.5 pts)
