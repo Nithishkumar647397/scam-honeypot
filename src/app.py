@@ -1,6 +1,7 @@
 """
 Flask application - Main API endpoint
 Owner: Member B
+Version: 2.1.1 (Fixes + Abuse Callback Preserved)
 """
 
 import os
@@ -17,11 +18,10 @@ from src.agent import generate_agent_reply, generate_agent_notes
 from src.callback import send_callback_async
 from src.config import Config
 
-# Safe imports for new detector features
+# Safe imports for detector features
 try:
     from src.detector import detect_scam, check_abuse, detect_playbook
 except ImportError:
-    # Fallback stubs if detector.py is old
     def detect_scam(msg, hist=None): return (False, 0.0, [], [])
     def check_abuse(msg): return {"abusive": False, "tier": "none", "matched": [], "action": "continue"}
     def detect_playbook(hist): return {}
@@ -40,13 +40,10 @@ def _build_cors_response(data, status_code=200):
     return response
 
 def _safe_detect_scam(text, history):
-    """Wrapper to handle different detector versions safely"""
     try:
         result = detect_scam(text, history)
-        if len(result) == 4:
-            return result
-        elif len(result) == 3:
-            return result + ([],) # Add empty modifiers
+        if len(result) == 4: return result
+        elif len(result) == 3: return result + ([],)
     except Exception as e:
         logger.error(f"Detector crash: {e}")
     return (False, 0.0, [], [])
@@ -89,12 +86,12 @@ def process_honeypot_request():
         return _build_cors_response({"status": "success", "reply": "System online."}, 200)
     
     try:
-        # 1. Abuse Check
+        # 1. Abuse Check (Restored Logic)
         abuse_check = check_abuse(scammer_text)
         if abuse_check["abusive"]:
             logger.warning(f"Critical Abuse: {abuse_check['matched']}")
             
-            # Try to send final callback before disengaging
+            # Send final callback before disengaging if session exists
             session = get_session(session_id)
             if session and session.scam_detected:
                 notes = generate_agent_notes(
@@ -117,13 +114,14 @@ def process_honeypot_request():
         if modifiers:
             logger.info(f"Session {session_id} Modifiers: {modifiers}")
         
-        # 3. Extract Intel
+        # 3. Extract Intel (With History Re-Extraction Fix)
         history_intel = extract_from_conversation(conversation_history)
         current_intel = extract_intelligence(scammer_text)
         combined_intel = merge_intelligence(history_intel, current_intel)
         
-        # 4. Update Session
-        true_message_count = len(conversation_history) + 2
+        # 4. Update Session (With Message Count Fix Logic)
+        # Note: We pass None for message_count initially to avoid the bug
+        # We will calculate TRUE count after adding the new message
         
         session = update_session(
             session_id,
@@ -131,17 +129,21 @@ def process_honeypot_request():
             confidence=max(confidence, session.confidence),
             new_message={"sender": "scammer", "text": scammer_text},
             extracted_intelligence=combined_intel,
-            indicators=indicators,
-            message_count=true_message_count
+            indicators=indicators
         )
         
-        # 5. Playbook Detection
+        # Calculate TRUE count from session history (reliable source of truth)
+        # +1 for pending agent reply
+        true_message_count = len(session.conversation_history) + 1
+        
+        # 5. Playbook Detection (Restored Logging)
         playbook_result = {}
         try:
             playbook_result = detect_playbook(session.conversation_history)
             if playbook_result.get("confidence", 0) > 0.3:
                 logger.info(f"Playbook: {playbook_result['playbook']} -> Next: {playbook_result.get('next_expected')}")
-        except Exception as e: logger.debug(f"Playbook error: {e}")
+        except Exception as e: 
+            logger.debug(f"Playbook error: {e}")
         
         # 6. Generate Reply
         reply = generate_agent_reply(
@@ -152,12 +154,16 @@ def process_honeypot_request():
             playbook_result=playbook_result
         )
         
-        update_session(session_id, new_message={"sender": "user", "text": reply})
+        update_session(
+            session_id, 
+            new_message={"sender": "user", "text": reply},
+            message_count=true_message_count # Update count correctly now
+        )
         
         # 7. Callback Check
         if should_send_callback(session):
             agent_notes = generate_agent_notes(
-                conversation_history=session.conversation_history,
+                conversation_history=session.conversation_history, # Correct history source
                 scam_indicators=session.indicators,
                 extracted_intelligence=session.extracted_intelligence,
                 emails_found=session.extracted_intelligence.get("emails", []),
@@ -185,7 +191,7 @@ def home():
     return _build_cors_response({
         "status": "running", 
         "service": "Scam Honeypot API",
-        "version": "2.0.0",
+        "version": "2.1.1",
         "features": ["smart-callback", "abuse-guard", "playbook-detection", "multi-persona"]
     })
 
