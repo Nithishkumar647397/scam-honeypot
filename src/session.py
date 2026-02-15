@@ -6,6 +6,7 @@ Fixes:
 - Reduce update interval to 2 messages
 - Use len(conversation_history) as source of truth
 - Prevent stale message count bug
+- Fix created_at tracking for duration metrics
 """
 
 import threading
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SessionData:
     session_id: str
-    created_at: datetime
-    message_count: int = 0  # Still kept for compatibility, but logic uses history length
+    created_at: datetime = field(default_factory=datetime.now)
+    message_count: int = 0
     scam_detected: bool = False
     confidence: float = 0.0
     conversation_history: List[Dict] = field(default_factory=list)
@@ -63,12 +64,9 @@ def get_session(session_id: str) -> Optional[SessionData]:
 def create_session(session_id: str) -> SessionData:
     with _sessions_lock:
         _cleanup_expired_sessions()
-        session = SessionData(
-            session_id=session_id,
-            created_at=datetime.now(),
-            last_activity=datetime.now()
-        )
+        session = SessionData(session_id=session_id)
         _sessions[session_id] = session
+        logger.info(f"Created session: {session_id}")
         return session
 
 
@@ -85,11 +83,7 @@ def update_session(
         session = _sessions.get(session_id)
         
         if session is None:
-            session = SessionData(
-                session_id=session_id,
-                created_at=datetime.now(),
-                last_activity=datetime.now()
-            )
+            session = SessionData(session_id=session_id)
             _sessions[session_id] = session
         
         session.last_activity = datetime.now()
@@ -98,6 +92,7 @@ def update_session(
             session.conversation_history.append(new_message)
             
         # Auto-calculate message count from history if not provided
+        # This is the CRITICAL FIX for the "stuck at 6" bug
         if message_count is not None:
             session.message_count = message_count
         else:
@@ -136,16 +131,11 @@ def _count_intel(session: SessionData) -> int:
 
 
 def should_send_callback(session: SessionData) -> bool:
-    """
-    Smart callback logic with FIX for message count tracking
-    """
     if session is None: return False
     if not session.scam_detected: return False
     
     # SOURCE OF TRUTH: Actual history length
     current_message_count = len(session.conversation_history)
-    
-    # Sync internal counter just in case
     session.message_count = current_message_count
     
     current_intel_count = _count_intel(session)
@@ -194,7 +184,7 @@ def should_send_callback(session: SessionData) -> bool:
         session.callback_count += 1
         return True
         
-    # 2. Conversation progressed (every 2 messages) -- CHANGED FROM 4 TO 2
+    # 2. Conversation progressed (every 2 messages)
     if current_message_count >= session.last_callback_message_count + 2:
         logger.info(f"Update callback: engagement depth ({session.last_callback_message_count} -> {current_message_count})")
         session.last_callback_message_count = current_message_count
