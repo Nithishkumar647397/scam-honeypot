@@ -45,7 +45,7 @@ SHORTENED_DOMAINS: List[str] = [
 
 UPI_PATTERN = r'[a-zA-Z0-9._-]+@[a-zA-Z]{2,}'
 BANK_ACCOUNT_PATTERN = r'\b[1-9]\d{8,17}\b'
-PHONE_PATTERN = r'\b[6-9]\d{9}\b'
+PHONE_PATTERN = r'(?:\+91[\-\s]?)?[6-9]\d{9}\b'  # Updated to handle +91
 IFSC_PATTERN = r'\b[A-Z]{4}0[A-Z0-9]{6}\b'
 URL_PATTERN = r'https?://[^\s<>"{}|\\^`\[\]]+(?<![.,;:!?\)\]])'
 SHORTENED_URL_PATTERN = r'\b(?:' + '|'.join(re.escape(d) for d in SHORTENED_DOMAINS) + r')/[a-zA-Z0-9]+'
@@ -98,19 +98,37 @@ def find_upi_ids(text: str) -> List[str]:
 def find_bank_accounts(text: str) -> List[str]:
     text = _prepare_text(text)
     if not text: return []
+    
+    # First find phones to exclude them
+    phones = find_phone_numbers(text)
+    clean_phones = [p.replace('+91', '').replace(' ', '').replace('-', '') for p in phones]
+    
     matches = re.findall(BANK_ACCOUNT_PATTERN, text)
     filtered = []
     for match in matches:
+        # Exclude if it's a known phone number
+        if match in clean_phones: continue
+        
+        # Exclude if it looks like a phone with 91 prefix (12 digits starting with 91)
+        if len(match) == 12 and match.startswith('91') and match[2] in '6789': continue
+        
+        # Exclude standard phone logic
         if len(match) == 10 and match[0] in '6789': continue
         if len(match) == 13 and match.startswith('1') and not match.startswith('1234'): continue
         if len(match) == 8: continue
+        
         filtered.append(match)
     return list(set(filtered))
 
 def find_phone_numbers(text: str) -> List[str]:
     text = _prepare_text(text)
     if not text: return []
-    return list(set(re.findall(PHONE_PATTERN, text)))
+    # Normalize +91 spacing
+    text = re.sub(r'\+91\s+', '+91', text)
+    matches = re.findall(PHONE_PATTERN, text)
+    # Clean up results
+    cleaned = [m.replace('+91', '').strip() for m in matches]
+    return list(set(cleaned))
 
 def find_ifsc_codes(text: str) -> List[str]:
     text = _prepare_text(text)
