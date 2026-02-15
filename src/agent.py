@@ -10,6 +10,7 @@ Features:
 - Consistent Honey Token Injection
 - Bank-Specific Knowledge
 - Playbook-aware responses
+- Humanized Persona (Typos, interruptions, double-texts)
 """
 
 from typing import List, Dict, Optional
@@ -24,11 +25,8 @@ from groq import Groq
 import httpx
 from src.config import Config
 
-# NOTE: detect_playbook and calculate_severity imported inside functions
-
 logger = logging.getLogger(__name__)
 
-# Thread-safe client
 _client: Optional[Groq] = None
 _http_client: Optional[httpx.Client] = None
 _client_lock = threading.Lock()
@@ -135,7 +133,7 @@ def build_system_prompt(language='english', phase='initial', fake_data=None, ban
     
     prompt = f"""You are Mrs. Kamala Devi, 67, retired teacher from Delhi.
 Traits: Tech-unsavvy, worried about money, polite but confused.
-Constraints: Short responses (<40 words). No asterisks (*actions*).
+Constraints: Short responses (<40 words). No asterisks (*actions*) or parentheses (actions).
 Self-Correction: If you get confused, express it naturally.
 
 YOUR DETAILS:
@@ -203,8 +201,7 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
         ))
         
         reply = _extract_reply_safe(resp)
-        reply = re.sub(r'\*[^*]+\*', '', reply).strip()
-        reply = re.sub(r'^As Kamala: ', '', reply).strip()
+        reply = _clean_reply(reply) # Stronger cleaning
         
         return reply if reply else "I don't understand."
         
@@ -212,9 +209,36 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
         logger.error(f"Agent error: {e}")
         return "Hello? Who is this?"
 
+def _clean_reply(reply: str) -> str:
+    """Aggressive cleanup of LLM artifacts"""
+    if not reply: return ""
+    
+    # 1. Remove standard markdown actions *action*
+    reply = re.sub(r'\*[^*]+\*', '', reply)
+    
+    # 2. Remove parenthetical actions (action) - Improved regex
+    reply = re.sub(r'\([a-zA-Z\s]+\)', '', reply)
+    
+    # 3. Remove bracket actions [action]
+    reply = re.sub(r'\[[^\]]+\]', '', reply)
+    
+    # 4. Remove prefixes
+    for prefix in ["As Mrs. Kamala", "Mrs. Kamala", "Kamala:", "Kamala Devi:"]:
+        if reply.lower().startswith(prefix.lower()):
+            reply = reply[len(prefix):].lstrip(' :,')
+            
+    # 5. Remove quotes
+    reply = reply.strip('"\'')
+    
+    # 6. Collapse whitespace
+    reply = re.sub(r'\s+', ' ', reply).strip()
+    
+    return reply
+
 def analyze_tactics(history, indicators):
     text = " ".join([m.get("text", "").lower() for m in history if m.get("sender") == "scammer"])
     tactics = []
+    
     if any(w in text for w in ['urgent', 'now', 'immediately']): tactics.append("urgency")
     if any(w in text for w in ['police', 'blocked', 'legal', 'arrest']): tactics.append("fear")
     if any(w in text for w in ['otp', 'pin', 'password', 'cvv']): tactics.append("credential_harvesting")
@@ -222,11 +246,10 @@ def analyze_tactics(history, indicators):
     if any(w in text for w in ['bank manager', 'rbi', 'officer', 'government']): tactics.append("authority_impersonation")
     if any(w in text for w in ['don\'t tell', 'secret', 'confidential', 'between us']): tactics.append("isolation")
     if any(w in text for w in ['send money', 'transfer', 'pay now', 'upi', 'deposit']): tactics.append("payment_redirection")
+    
     return list(set(tactics))
 
-# === RE-ADDED FUNCTION ===
 def calculate_sophistication(tactics, intel):
-    """Calculates Scammer Sophistication Score"""
     score = len(tactics)
     score += len(intel.get("upiIds", [])) * 2
     score += len(intel.get("bankAccounts", [])) * 2
