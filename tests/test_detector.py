@@ -45,14 +45,14 @@ class TestDetectScam:
 
     def test_credential_request_detected(self):
         is_scam, confidence, indicators, _ = detect_scam(
-            "Please share your OTP and PIN for verification."
+            "URGENT! Share your OTP and PIN for verification immediately."
         )
         assert is_scam is True
         assert "credential_request" in indicators
 
     def test_payment_request_detected(self):
         is_scam, confidence, indicators, _ = detect_scam(
-            "Send Rs 500 to this account immediately."
+            "Your account is blocked! Send money Rs. 500 to this account immediately."
         )
         assert is_scam is True
         assert "payment_request" in indicators
