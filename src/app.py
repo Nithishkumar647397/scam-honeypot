@@ -18,13 +18,15 @@ from src.agent import generate_agent_reply, generate_agent_notes
 from src.callback import send_callback_async
 from src.config import Config
 
-# Safe imports for detector features
+# Safe imports for detector features with fallback stubs
 try:
-    from src.detector import detect_scam, check_abuse, detect_playbook
-except ImportError:
+    from src.detector import detect_scam, check_abuse, detect_playbook, detect_red_flags
+except ImportError as e:
+    logger.warning(f"Detector import failed, using stubs: {e}")
     def detect_scam(msg, hist=None): return (False, 0.0, [], [])
     def check_abuse(msg): return {"abusive": False, "tier": "none", "matched": [], "action": "continue"}
     def detect_playbook(hist): return {}
+    def detect_red_flags(hist): return []
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,14 +138,24 @@ def process_honeypot_request():
         # +1 for pending agent reply
         true_message_count = len(session.conversation_history) + 1
         
-        # 5. Playbook Detection (Restored Logging)
+        # 5. Playbook Detection
         playbook_result = {}
         try:
             playbook_result = detect_playbook(session.conversation_history)
             if playbook_result.get("confidence", 0) > 0.3:
                 logger.info(f"Playbook: {playbook_result['playbook']} -> Next: {playbook_result.get('next_expected')}")
-        except Exception as e: 
-            logger.debug(f"Playbook error: {e}")
+        except Exception as e:
+            logger.warning(f"Playbook detection error for session {session_id}: {e}")
+
+        # 5b. Red Flag Detection
+        red_flags = []
+        try:
+            red_flags = detect_red_flags(session.conversation_history)
+            if red_flags:
+                flag_names = [f['flag'] for f in red_flags]
+                logger.info(f"Red flags for session {session_id}: {', '.join(flag_names)}")
+        except Exception as e:
+            logger.warning(f"Red flag detection error for session {session_id}: {e}")
         
         # 6. Generate Reply
         reply = generate_agent_reply(

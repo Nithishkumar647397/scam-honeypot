@@ -1,12 +1,11 @@
 """
-Session management for multi-turn conversations
-Owner: Member B
+Thread-safe session management for multi-turn honeypot conversations.
 
-Fixes:
-- Reduce update interval to 2 messages
-- Use len(conversation_history) as source of truth
-- Prevent stale message count bug
-- Fix created_at tracking for duration metrics
+Manages in-memory session state including conversation history, extracted
+intelligence, scam indicators, and callback tracking. Sessions auto-expire
+after SESSION_EXPIRY_HOURS of inactivity.
+
+Owner: Member B
 """
 
 import threading
