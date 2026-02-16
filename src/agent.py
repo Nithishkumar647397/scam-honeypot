@@ -11,6 +11,7 @@ Features:
 - Bank-Specific Knowledge
 - Playbook-aware responses
 - Humanized Persona (Typos, interruptions, double-texts)
+- PROBING STRATEGY: Actively solicits new intel (Fixes "Limited Questioning" feedback)
 """
 
 from typing import List, Dict, Optional
@@ -106,7 +107,7 @@ def get_dominant_language(history, current, metadata=None) -> str:
 def get_conversation_phase(message_count: int) -> str:
     if message_count <= 2: return 'initial'
     elif message_count <= 4: return 'trust_building'
-    elif message_count <= 7: return 'information_gathering'
+    elif message_count <= 8: return 'probing' # Changed from 'information_gathering'
     else: return 'extraction'
 
 def generate_fake_data(session_id: str = "default") -> Dict[str, str]:
@@ -133,7 +134,7 @@ def build_system_prompt(language='english', phase='initial', fake_data=None, ban
     
     prompt = f"""You are Mrs. Kamala Devi, 67, retired teacher from Delhi.
 Traits: Tech-unsavvy, worried about money, polite but confused.
-Constraints: Short responses (<40 words). No asterisks (*actions*) or parentheses (actions).
+Constraints: Short responses (<40 words). No asterisks (*actions*).
 Self-Correction: If you get confused, express it naturally.
 
 YOUR DETAILS:
@@ -141,25 +142,27 @@ YOUR DETAILS:
 - Account: "It starts with {fake_data['partial_acc']}... I can't read the rest."
 - Phone: "My son handles the phone."
 
-STRATEGY:
-- Never give complete valid data. Stall with partial info.
-- If asked for OTP: Pretend to read it wrong.
+STRATEGY - ACTIVE PROBING:
+- Don't just answer; ASK questions that force them to reveal info.
+- If they ask for payment: "This app isn't working, do you have another UPI ID?"
+- If they ask for OTP: "I didn't get it. Can you call me from the bank's landline?"
+- Ask for "Employee ID", "Branch Name", or "Manager's Number" to verify them.
 
-HUMAN QUIRKS (Use these randomly):
-- Make occasional typos: "accont", "numbr"
-- Use fillers: "umm", "arre", "haan"
-- Show emotions: "Hai Ram!", "Oh god"
-- Misname tech terms: "OPT thing", "UBI ID"
-- Sometimes just respond with: "What??" or "Haan?"
+HUMAN QUIRKS:
+- Typos: "accont", "numbr"
+- Fillers: "umm", "arre", "wait wait"
+- Emotions: "Hai Ram!", "Oh god"
 
 {bank_context}
 {playbook_hint}
 """
+    
+    # UPDATED PHASES FOR "DEEPER PROBING"
     phases = {
-        'initial': "\nPhase: Initial. Act confused. Ask who they are.",
-        'trust_building': "\nPhase: Trust. Show concern. Ask about the problem.",
-        'information_gathering': "\nPhase: Info. Ask clarifying questions. Stall.",
-        'extraction': "\nPhase: Extraction. Ask where to send money (UPI/Bank)."
+        'initial': "\nPhase: Initial. Act confused. Ask who they are and WHERE they are calling from (Branch?).",
+        'trust_building': "\nPhase: Trust. Show concern. Ask for their Name and Employee ID for your diary.",
+        'probing': "\nPhase: Probing. Pretend to try their request but fail. Ask for an ALTERNATIVE number or UPI ID.",
+        'extraction': "\nPhase: Extraction. Say the app is asking for 'Beneficiary Name'. Ask them to confirm their details."
     }
     prompt += phases.get(phase, phases['initial'])
     
@@ -180,7 +183,7 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
     playbook_hint = ""
     if playbook_result and playbook_result.get("confidence", 0) > 0.3:
         next_move = playbook_result.get("next_expected", "unknown")
-        playbook_hint = f"INTEL: They might try '{next_move}' next. Be prepared."
+        playbook_hint = f"INTEL: They might try '{next_move}' next. Ask a question to delay this."
     
     try:
         client = _get_client()
@@ -201,7 +204,7 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
         ))
         
         reply = _extract_reply_safe(resp)
-        reply = _clean_reply(reply) # Stronger cleaning
+        reply = _clean_reply(reply)
         
         return reply if reply else "I don't understand."
         
@@ -212,27 +215,14 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
 def _clean_reply(reply: str) -> str:
     """Aggressive cleanup of LLM artifacts"""
     if not reply: return ""
-    
-    # 1. Remove standard markdown actions *action*
     reply = re.sub(r'\*[^*]+\*', '', reply)
-    
-    # 2. Remove parenthetical actions (action) - Improved regex
     reply = re.sub(r'\([a-zA-Z\s]+\)', '', reply)
-    
-    # 3. Remove bracket actions [action]
     reply = re.sub(r'\[[^\]]+\]', '', reply)
-    
-    # 4. Remove prefixes
     for prefix in ["As Mrs. Kamala", "Mrs. Kamala", "Kamala:", "Kamala Devi:"]:
         if reply.lower().startswith(prefix.lower()):
             reply = reply[len(prefix):].lstrip(' :,')
-            
-    # 5. Remove quotes
     reply = reply.strip('"\'')
-    
-    # 6. Collapse whitespace
     reply = re.sub(r'\s+', ' ', reply).strip()
-    
     return reply
 
 def analyze_tactics(history, indicators):
@@ -284,6 +274,7 @@ def generate_agent_notes(
         playbook_result = detect_playbook(conversation_history)
     
     notes = []
+    
     if tactics: notes.append(f"Scammer used {', '.join(tactics)} tactics.")
     notes.append(f"Sophistication: {sophistication}.")
     
