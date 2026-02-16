@@ -5,13 +5,13 @@ Owner: Member A
 Features:
 - Security hardened
 - Self-correction
-- Rich agent notes (Sophistication, Playbook, Abuse, Language, Severity, IDs)
+- Rich agent notes
 - Metadata-aware language detection
-- Consistent Honey Token Injection
+- Consistent Honey Token Injection (Fixed)
 - Bank-Specific Knowledge
 - Playbook-aware responses
-- Humanized Persona (Typos, interruptions, double-texts)
-- PROBING STRATEGY: Actively solicits new intel (Fixes "Limited Questioning" feedback)
+- Humanized Persona
+- Active Probing Strategy
 """
 
 from typing import List, Dict, Optional
@@ -104,14 +104,17 @@ def get_dominant_language(history, current, metadata=None) -> str:
     counts[detect_language(current)] += 1
     return max(counts, key=counts.get)
 
+# FIX: Phase calculation based on Turns (Message Count / 2)
 def get_conversation_phase(message_count: int) -> str:
-    if message_count <= 2: return 'initial'
-    elif message_count <= 4: return 'trust_building'
-    elif message_count <= 8: return 'probing' # Changed from 'information_gathering'
+    turn = message_count // 2
+    if turn <= 1: return 'initial'
+    elif turn <= 3: return 'trust_building'
+    elif turn <= 6: return 'probing'
     else: return 'extraction'
 
+# FIX: Fake Data Seed using Session ID (Requires session_id passed or default)
 def generate_fake_data(session_id: str = "default") -> Dict[str, str]:
-    seed = int(hashlib.md5(session_id.encode()).hexdigest(), 16)
+    seed = int(hashlib.md5(str(session_id).encode()).hexdigest(), 16)
     acc_start = 3000 + (seed % 1000)
     phone_end = 100 + (seed % 900)
     return {
@@ -157,12 +160,12 @@ HUMAN QUIRKS:
 {playbook_hint}
 """
     
-    # UPDATED PHASES FOR "DEEPER PROBING"
+    # FIX: Updated Probing Prompt with Fallback
     phases = {
-        'initial': "\nPhase: Initial. Act confused. Ask who they are and WHERE they are calling from (Branch?).",
-        'trust_building': "\nPhase: Trust. Show concern. Ask for their Name and Employee ID for your diary.",
-        'probing': "\nPhase: Probing. Pretend to try their request but fail. Ask for an ALTERNATIVE number or UPI ID.",
-        'extraction': "\nPhase: Extraction. Say the app is asking for 'Beneficiary Name'. Ask them to confirm their details."
+        'initial': "\nPhase: Initial. Act confused. Ask who they are and WHERE they are calling from.",
+        'trust_building': "\nPhase: Trust. Show concern. Ask for their Name and Employee ID.",
+        'probing': "\nPhase: Probing. Pretend to try but fail. Ask for ALTERNATIVE UPI or Account. Fallback: Ask for Branch Manager's number.",
+        'extraction': "\nPhase: Extraction. Say app asks for 'Beneficiary Name'. Ask them to confirm details."
     }
     prompt += phases.get(phase, phases['initial'])
     
@@ -174,21 +177,22 @@ HUMAN QUIRKS:
     prompt += langs.get(language, langs['english'])
     return prompt
 
-def generate_agent_reply(current_message, conversation_history, scam_indicators=None, metadata=None, playbook_result=None):
+def generate_agent_reply(current_message, conversation_history, scam_indicators=None, metadata=None, playbook_result=None, session_id="default"):
     sanitized = _sanitize_input(current_message)
-    session_seed = str(len(conversation_history))
-    fake_data = generate_fake_data(session_seed)
+    
+    # FIX: Use session_id for consistent fake data
+    fake_data = generate_fake_data(session_id)
     bank_context = get_bank_context(sanitized)
     
     playbook_hint = ""
     if playbook_result and playbook_result.get("confidence", 0) > 0.3:
         next_move = playbook_result.get("next_expected", "unknown")
-        playbook_hint = f"INTEL: They might try '{next_move}' next. Ask a question to delay this."
+        playbook_hint = f"INTEL: They might try '{next_move}' next. Delay them."
     
     try:
         client = _get_client()
         lang = get_dominant_language(conversation_history, sanitized, metadata)
-        phase = get_conversation_phase(len(conversation_history))
+        phase = get_conversation_phase(len(conversation_history)) # Now calculates turns correctly inside function
         safe_inds = _sanitize_indicators(scam_indicators)
         
         messages = [{"role": "system", "content": build_system_prompt(lang, phase, fake_data, bank_context, playbook_hint)}]
@@ -213,7 +217,6 @@ def generate_agent_reply(current_message, conversation_history, scam_indicators=
         return "Hello? Who is this?"
 
 def _clean_reply(reply: str) -> str:
-    """Aggressive cleanup of LLM artifacts"""
     if not reply: return ""
     reply = re.sub(r'\*[^*]+\*', '', reply)
     reply = re.sub(r'\([a-zA-Z\s]+\)', '', reply)
@@ -263,7 +266,6 @@ def generate_agent_notes(
     context_modifiers: Optional[List[str]] = None,
     abuse_check: Optional[Dict] = None
 ) -> str:
-    """Generates rich agent notes."""
     from src.detector import detect_playbook, calculate_severity
     
     tactics = analyze_tactics(conversation_history, scam_indicators)

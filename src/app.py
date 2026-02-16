@@ -1,7 +1,6 @@
 """
 Flask application - Main API endpoint
 Owner: Member B
-Version: 2.1.1 (Fixes + Abuse Callback Preserved)
 """
 
 import os
@@ -86,12 +85,9 @@ def process_honeypot_request():
         return _build_cors_response({"status": "success", "reply": "System online."}, 200)
     
     try:
-        # 1. Abuse Check (Restored Logic)
         abuse_check = check_abuse(scammer_text)
         if abuse_check["abusive"]:
             logger.warning(f"Critical Abuse: {abuse_check['matched']}")
-            
-            # Send final callback before disengaging if session exists
             session = get_session(session_id)
             if session and session.scam_detected:
                 notes = generate_agent_notes(
@@ -99,7 +95,6 @@ def process_honeypot_request():
                     session.extracted_intelligence, abuse_check=abuse_check
                 ) + " Session terminated due to abuse."
                 send_callback_async(session, notes)
-                
             return _build_cors_response({"status": "success", "reply": ""}, 200)
             
         if abuse_check.get("tier") == "severe":
@@ -108,20 +103,16 @@ def process_honeypot_request():
         session = get_session(session_id)
         if session is None: session = create_session(session_id)
         
-        # 2. Detect Scam
         is_scam, confidence, indicators, modifiers = _safe_detect_scam(scammer_text, conversation_history)
         
         if modifiers:
             logger.info(f"Session {session_id} Modifiers: {modifiers}")
         
-        # 3. Extract Intel (With History Re-Extraction Fix)
         history_intel = extract_from_conversation(conversation_history)
         current_intel = extract_intelligence(scammer_text)
         combined_intel = merge_intelligence(history_intel, current_intel)
         
-        # 4. Update Session (With Message Count Fix Logic)
-        # Note: We pass None for message_count initially to avoid the bug
-        # We will calculate TRUE count after adding the new message
+        true_message_count = len(conversation_history) + 2
         
         session = update_session(
             session_id,
@@ -129,14 +120,10 @@ def process_honeypot_request():
             confidence=max(confidence, session.confidence),
             new_message={"sender": "scammer", "text": scammer_text},
             extracted_intelligence=combined_intel,
-            indicators=indicators
+            indicators=indicators,
+            message_count=true_message_count
         )
         
-        # Calculate TRUE count from session history (reliable source of truth)
-        # +1 for pending agent reply
-        true_message_count = len(session.conversation_history) + 1
-        
-        # 5. Playbook Detection (Restored Logging)
         playbook_result = {}
         try:
             playbook_result = detect_playbook(session.conversation_history)
@@ -145,25 +132,24 @@ def process_honeypot_request():
         except Exception as e: 
             logger.debug(f"Playbook error: {e}")
         
-        # 6. Generate Reply
         reply = generate_agent_reply(
             current_message=scammer_text,
             conversation_history=session.conversation_history,
             scam_indicators=session.indicators,
             metadata=metadata,
-            playbook_result=playbook_result
+            playbook_result=playbook_result,
+            session_id=session_id  # FIX: Pass session_id here
         )
         
         update_session(
             session_id, 
             new_message={"sender": "user", "text": reply},
-            message_count=true_message_count # Update count correctly now
+            message_count=true_message_count 
         )
         
-        # 7. Callback Check
         if should_send_callback(session):
             agent_notes = generate_agent_notes(
-                conversation_history=session.conversation_history, # Correct history source
+                conversation_history=session.conversation_history,
                 scam_indicators=session.indicators,
                 extracted_intelligence=session.extracted_intelligence,
                 emails_found=session.extracted_intelligence.get("emails", []),
@@ -195,11 +181,11 @@ def home():
         "features": ["smart-callback", "abuse-guard", "playbook-detection", "multi-persona"]
     })
 
-@app.route('/honeypot', methods=['POST', 'OPTIONS'])
 @app.route('/honeypot', methods=['GET', 'POST', 'OPTIONS'])
 def honeypot_endpoint():
     if request.method == 'OPTIONS': return _build_cors_response({})
-    if request.method == 'GET': return _build_cors_response({"status": "active", "message": "Honeypot API is running"}, 200)
+    if request.method == 'GET':
+        return _build_cors_response({"status": "active", "message": "Honeypot API is running"}, 200)
     return process_honeypot_request()
 
 @app.route('/dashboard', methods=['GET'])

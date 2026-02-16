@@ -1,9 +1,20 @@
 """
 Intelligence extraction module
 Owner: Member A
+
+Improvements:
+- Import at top level
+- Logging added
+- Input validation
+- Extended number words (English + Hindi)
+- Better type hints
+- Constants for thresholds
 """
 
-from typing import Dict, List
+import re
+import logging
+from typing import Dict, List, Optional
+
 from src.patterns import (
     find_upi_ids,
     find_bank_accounts,
@@ -16,41 +27,73 @@ from src.patterns import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
+# ============== CONSTANTS ==============
+
+MAX_MESSAGE_LENGTH = 50000
+DEFAULT_INTELLIGENCE_THRESHOLD = 2
+
+# Number words mapping (English)
+NUMBER_WORDS_EN: Dict[str, str] = {
+    'zero': '0', 'one': '1', 'two': '2', 'three': '3',
+    'four': '4', 'five': '5', 'six': '6', 'seven': '7',
+    'eight': '8', 'nine': '9', 'ten': '10',
+    'eleven': '11', 'twelve': '12', 'thirteen': '13',
+    'fourteen': '14', 'fifteen': '15', 'sixteen': '16',
+    'seventeen': '17', 'eighteen': '18', 'nineteen': '19',
+    'twenty': '20', 'thirty': '30', 'forty': '40', 'fifty': '50',
+    'sixty': '60', 'seventy': '70', 'eighty': '80', 'ninety': '90',
+}
+
+# Number words mapping (Hindi/Hinglish)
+NUMBER_WORDS_HI: Dict[str, str] = {
+    'ek': '1', 'do': '2', 'teen': '3', 'char': '4',
+    'paanch': '5', 'panch': '5', 'chhe': '6', 'cheh': '6',
+    'saat': '7', 'aath': '8', 'nau': '9', 'das': '10',
+    'shunya': '0', 'sifar': '0'
+}
+
+# Combine all number words
+NUMBER_WORDS: Dict[str, str] = {**NUMBER_WORDS_EN, **NUMBER_WORDS_HI}
+
+# Intelligence keys (high value)
+HIGH_VALUE_KEYS: List[str] = [
+    "upiIds", "bankAccounts", "phoneNumbers",
+    "ifscCodes", "phishingLinks", "emails"
+]
+
+
+# ============== NORMALIZATION ==============
+
 def normalize_text(text: str) -> str:
     """
     Normalizes obfuscated text for better extraction
-    
-    Converts:
-        - "nine eight seven" → "987"
-        - "at" → "@"
-        - Spaced numbers → joined numbers
     """
     if not text:
         return ""
     
-    # Number words to digits
-    number_words = {
-        'zero': '0', 'one': '1', 'two': '2', 'three': '3',
-        'four': '4', 'five': '5', 'six': '6', 'seven': '7',
-        'eight': '8', 'nine': '9', 'ten': '10'
-    }
-    
     normalized = text.lower()
     
-    # Replace number words
-    for word, digit in number_words.items():
-        normalized = normalized.replace(word, digit)
+    # Replace number words (longer words first to avoid partial matches)
+    sorted_words = sorted(NUMBER_WORDS.keys(), key=len, reverse=True)
+    for word in sorted_words:
+        normalized = normalized.replace(word, NUMBER_WORDS[word])
     
     # "at" to "@" (for emails/UPIs)
-    normalized = normalized.replace(' at ', '@')
-    normalized = normalized.replace(' AT ', '@')
+    normalized = re.sub(r'\s+at\s+', '@', normalized, flags=re.IGNORECASE)
     
     # Remove spaces between digits (9 8 7 6 → 9876)
-    import re
     normalized = re.sub(r'(\d)\s+(?=\d)', r'\1', normalized)
+    
+    # Remove common separators in numbers (9-8-7-6 → 9876)
+    normalized = re.sub(r'(\d)[-.\s]+(?=\d)', r'\1', normalized)
     
     return normalized
 
+
+# ============== CORE EXTRACTION ==============
 
 def extract_intelligence(message: str) -> Dict[str, List[str]]:
     """
@@ -60,17 +103,39 @@ def extract_intelligence(message: str) -> Dict[str, List[str]]:
     if not message:
         return _empty_intelligence()
     
-    # Extract from original text
-    original_intel = _extract_from_text(message)
+    # Input validation
+    if len(message) > MAX_MESSAGE_LENGTH:
+        logger.debug(f"Message truncated from {len(message)} to {MAX_MESSAGE_LENGTH}")
+        message = message[:MAX_MESSAGE_LENGTH]
     
-    # Also extract from normalized text (for obfuscated data)
-    normalized = normalize_text(message)
-    if normalized != message.lower():
-        normalized_intel = _extract_from_text(normalized)
-        # Merge results
-        original_intel = merge_intelligence(original_intel, normalized_intel)
+    try:
+        # Extract from original text
+        original_intel = _extract_from_text(message)
+        
+        # Also extract from normalized text (for obfuscated data)
+        normalized = normalize_text(message)
+        if normalized != message.lower():
+            normalized_intel = _extract_from_text(normalized)
+            original_intel = merge_intelligence(original_intel, normalized_intel)
+        
+        # Remove False Positives from UPIs (Extra safety layer)
+        if 'upiIds' in original_intel:
+            # src/patterns.py already filters, but double check against common English words
+            invalid_upis = {'still@risk', 'unavailable@the', 'is@risk'}
+            original_intel['upiIds'] = [
+                upi for upi in original_intel['upiIds'] 
+                if upi.lower() not in invalid_upis and not upi.endswith('@the')
+            ]
+        
+        item_count = count_intelligence_items(original_intel)
+        if item_count > 0:
+            logger.debug(f"Extracted {item_count} intelligence items")
+        
+        return original_intel
     
-    return original_intel
+    except Exception as e:
+        logger.error(f"Extraction error: {e}")
+        return _empty_intelligence()
 
 
 def _extract_from_text(text: str) -> Dict[str, List[str]]:
@@ -89,7 +154,9 @@ def _extract_from_text(text: str) -> Dict[str, List[str]]:
     }
 
 
-def extract_from_conversation(conversation_history: list) -> Dict[str, List[str]]:
+def extract_from_conversation(
+    conversation_history: List[Dict[str, str]]
+) -> Dict[str, List[str]]:
     """
     Extracts intelligence from entire conversation history
     """
@@ -102,6 +169,7 @@ def extract_from_conversation(conversation_history: list) -> Dict[str, List[str]
         sender = message.get("sender", "")
         text = message.get("text", "")
         
+        # Only extract from scammer messages
         if sender == "scammer" and text:
             intel = extract_intelligence(text)
             aggregated = merge_intelligence(aggregated, intel)
@@ -109,9 +177,14 @@ def extract_from_conversation(conversation_history: list) -> Dict[str, List[str]
     return aggregated
 
 
-def merge_intelligence(intel1: Dict[str, List[str]], intel2: Dict[str, List[str]]) -> Dict[str, List[str]]:
+# ============== MERGE & UTILITIES ==============
+
+def merge_intelligence(
+    intel1: Optional[Dict[str, List[str]]],
+    intel2: Optional[Dict[str, List[str]]]
+) -> Dict[str, List[str]]:
     """
-    Merges two intelligence dictionaries
+    Merges two intelligence dictionaries, removing duplicates
     """
     if not intel1:
         return intel2 or _empty_intelligence()
@@ -122,35 +195,39 @@ def merge_intelligence(intel1: Dict[str, List[str]], intel2: Dict[str, List[str]
     
     for key in merged:
         combined = intel1.get(key, []) + intel2.get(key, [])
-        merged[key] = list(set(combined))
+        # Remove duplicates while preserving some order
+        merged[key] = list(dict.fromkeys(combined))
     
     return merged
 
 
-def count_intelligence_items(intelligence: Dict[str, List[str]]) -> int:
+def count_intelligence_items(intelligence: Optional[Dict[str, List[str]]]) -> int:
     """
-    Counts total number of extracted intelligence items
+    Counts total number of extracted high-value intelligence items
     """
     if not intelligence:
         return 0
     
-    high_value_keys = ["upiIds", "bankAccounts", "phoneNumbers", "ifscCodes", "phishingLinks", "emails", "scammerIds"]
-    
     total = 0
-    for key in high_value_keys:
+    for key in HIGH_VALUE_KEYS:
         total += len(intelligence.get(key, []))
     
     return total
 
 
-def has_sufficient_intelligence(intelligence: Dict[str, List[str]], threshold: int = 2) -> bool:
+def has_sufficient_intelligence(
+    intelligence: Optional[Dict[str, List[str]]],
+    threshold: int = DEFAULT_INTELLIGENCE_THRESHOLD
+) -> bool:
     """
     Checks if enough intelligence has been gathered
     """
     return count_intelligence_items(intelligence) >= threshold
 
 
-def format_intelligence_summary(intelligence: Dict[str, List[str]]) -> str:
+# ============== FORMATTING ==============
+
+def format_intelligence_summary(intelligence: Optional[Dict[str, List[str]]]) -> str:
     """
     Creates human-readable summary of extracted intelligence
     """
@@ -159,31 +236,29 @@ def format_intelligence_summary(intelligence: Dict[str, List[str]]) -> str:
     
     parts = []
     
-    if intelligence.get("upiIds"):
-        parts.append(f"UPI IDs: {', '.join(intelligence['upiIds'])}")
+    labels = {
+        "upiIds": "UPI IDs",
+        "bankAccounts": "Bank Accounts",
+        "phoneNumbers": "Phone Numbers",
+        "ifscCodes": "IFSC Codes",
+        "phishingLinks": "Links",
+        "emails": "Emails"
+    }
     
-    if intelligence.get("bankAccounts"):
-        parts.append(f"Bank Accounts: {', '.join(intelligence['bankAccounts'])}")
-    
-    if intelligence.get("phoneNumbers"):
-        parts.append(f"Phone Numbers: {', '.join(intelligence['phoneNumbers'])}")
-    
-    if intelligence.get("ifscCodes"):
-        parts.append(f"IFSC Codes: {', '.join(intelligence['ifscCodes'])}")
-    
-    if intelligence.get("phishingLinks"):
-        parts.append(f"Links: {', '.join(intelligence['phishingLinks'])}")
-    
-    if intelligence.get("emails"):
-        parts.append(f"Emails: {', '.join(intelligence['emails'])}")
+    for key, label in labels.items():
+        items = intelligence.get(key, [])
+        if items:
+            parts.append(f"{label}: {', '.join(items)}")
     
     return " | ".join(parts) if parts else "No actionable intelligence extracted"
 
 
-def get_emails_for_notes(intelligence: Dict[str, List[str]]) -> List[str]:
+def get_emails_for_notes(intelligence: Optional[Dict[str, List[str]]]) -> List[str]:
     """
     Returns emails for inclusion in agent notes
     """
+    if not intelligence:
+        return []
     return intelligence.get("emails", [])
 
 
