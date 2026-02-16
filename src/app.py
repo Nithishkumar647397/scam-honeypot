@@ -196,8 +196,10 @@ def home():
     })
 
 @app.route('/honeypot', methods=['POST', 'OPTIONS'])
+@app.route('/honeypot', methods=['GET', 'POST', 'OPTIONS'])
 def honeypot_endpoint():
     if request.method == 'OPTIONS': return _build_cors_response({})
+    if request.method == 'GET': return _build_cors_response({"status": "active", "message": "Honeypot API is running"}, 200)
     return process_honeypot_request()
 
 @app.route('/dashboard', methods=['GET'])
