@@ -27,6 +27,21 @@ from groq import Groq
 import httpx
 from src.config import Config
 
+
+def count_questions(text: str) -> int:
+    """Count question marks in agent reply"""
+    return text.count('?')
+
+
+def is_investigative_question(text: str) -> bool:
+    """Check if text contains investigative question keywords"""
+    keywords = [
+        "employee id", "branch", "callback number", "landline",
+        "helpline", "manager", "website", "email", "office"
+    ]
+    return any(k in text.lower() for k in keywords)
+
+
 logger = logging.getLogger(__name__)
 
 _client: Optional[Groq] = None
@@ -408,6 +423,14 @@ STRATEGY - CONTEXT-AWARE PROBING:
 
 CRITICAL RULE: ALWAYS ask a follow-up question. Never end with just a statement.
 
+CONVERSATION QUALITY REQUIREMENTS:
+
+Ask at least 2 questions per reply (use ? marks)
+Include investigative questions like: "What is your employee ID?",
+"Which branch are you calling from?", "What is your callback number?",
+"Can you give me your helpline number?", "Which manager should I speak to?"
+Naturally mention red flags you notice in the conversation
+
 HUMAN QUIRKS:
 - Typos: "accont", "numbr", "transferr"
 - Fillers: "umm", "arre", "wait wait", "accha"
@@ -628,6 +651,7 @@ def generate_agent_notes(
     if intel.get("ifscCodes"): extracted.append(f"IFSC: {', '.join(intel['ifscCodes'][:3])}")
     if intel.get("phishingLinks"): extracted.append(f"Links: {', '.join(intel['phishingLinks'][:3])}")
     if emails_found: extracted.append(f"Emails: {', '.join(emails_found[:3])}")
+<<<<<<< HEAD
     if intel.get("scammerIds"): extracted.append(f"Scammer IDs: {', '.join(intel['scammerIds'][:3])}")
 
     if extracted:
@@ -662,4 +686,41 @@ def generate_agent_notes(
     lang = get_dominant_language(conversation_history, "")
     notes.append(f"Language: {lang}.")
 
+=======
+    if intel.get("scammerIds"): extracted.append(f"IDs: {', '.join(intel['scammerIds'][:3])}")
+    
+    if extracted: notes.append(f"Extracted: {'; '.join(extracted)}.")
+    else: notes.append("No actionable intel extracted.")
+    
+    if context_modifiers: notes.append(f"Modifiers: {', '.join(context_modifiers)}.")
+    if abuse_check and abuse_check.get("tier") != "none": notes.append(f"Abuse: {abuse_check['tier']} ({', '.join(abuse_check.get('matched', []))}).")
+        
+    scammer_msgs = sum(1 for m in conversation_history if m.get("sender") == "scammer")
+    agent_msgs = len(conversation_history) - scammer_msgs
+    notes.append(f"Engagement: {scammer_msgs} scammer msgs, {agent_msgs} agent msgs.")
+
+    agent_replies = [m.get("text", "") for m in conversation_history if m.get("sender") != "scammer"]
+    total_questions = sum(count_questions(reply) for reply in agent_replies)
+    investigative_questions = sum(1 for reply in agent_replies if is_investigative_question(reply))
+    notes.append(f"Quality: Asked {total_questions} questions ({investigative_questions} investigative).")
+    
+    lang = get_dominant_language(conversation_history, "")
+    notes.append(f"Lang: {lang}.")
+    
+    # Track conversation quality metrics
+    agent_msgs_list = [
+        m.get("text", "")
+        for m in conversation_history
+        if m.get("sender") != "scammer"
+    ]
+    total_questions = sum(count_questions(msg) for msg in agent_msgs_list)
+    investigative_count = sum(
+        1 for msg in agent_msgs_list
+        if is_investigative_question(msg)
+    )
+    notes.append(
+        f"Quality: Asked {total_questions} questions ({investigative_count} investigative)."
+    )
+        
+>>>>>>> 373770f ("pending agent ")
     return " ".join(notes)

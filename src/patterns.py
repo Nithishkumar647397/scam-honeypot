@@ -136,19 +136,10 @@ def find_phone_numbers(text: str) -> List[str]:
     all_variants = set()
 
     for match in matches:
-        # 1. Add the raw match, stripped of whitespace
-        raw_match = match.strip()
-        all_variants.add(raw_match)
-
-        # 2. Create normalized versions to ensure substring matching
-        core_number = re.sub(r'[^0-9]', '', raw_match)[-10:]
-
-        # Add 10-digit version
-        all_variants.add(core_number)
-
-        # If it had a country code, add normalized +91 versions
-        if '+91' in raw_match or (len(re.sub(r'[^0-9]', '', raw_match)) == 12 and raw_match.startswith('91')):
-            all_variants.add(f"+91{core_number}")
+        # Normalize to exactly 10 digits
+        core_number = re.sub(r'[^0-9]', '', match)[-10:]
+        # Only store the strict +91- format
+        if len(core_number) == 10:
             all_variants.add(f"+91-{core_number}")
 
     return list(all_variants)
